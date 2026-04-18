@@ -4,8 +4,11 @@ Lightweight transcription microservice. Part of the YouTube AI Chat stack.
 
 ## Endpoints
 
-- `POST /transcribe` — Download audio via yt-dlp and transcribe with faster-whisper. Requires `Authorization: Bearer <VPS_API_KEY>`.
+- `POST /captions` — Fetch YouTube auto-captions for a video. Returns 200 with `{ transcript, source, language, title, channelName }` or 404 `{ error: "no_captions" }` if the video has none. Much cheaper than transcription — call this first.
+- `POST /transcribe` — Download audio via yt-dlp and transcribe with whisper-ctranslate2. Fallback when captions aren't available.
 - `GET /health` — Health check (unauthenticated).
+
+Both data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
 
 ## Tech
 

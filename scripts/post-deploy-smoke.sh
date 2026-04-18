@@ -33,11 +33,11 @@ fi
 echo "[smoke] OK: VPS egress=$vps_ip, container egress=$container_ip (residential)"
 
 echo "[smoke] whisper-ctranslate2: verifying the CLI binary is on PATH inside the app container"
-# The original transcribe outage (PR #6) was a latent ENOENT on a missing
-# CLI — pip installed `faster-whisper` the library, but no `faster-whisper`
-# binary existed. Verifying `--version` from a shell that matches the one
+# Catches ENOENT-class failures where a Python-only package was installed
+# but no binary exists on PATH (e.g. `pip install faster-whisper` gives
+# you the library but no CLI). Verifying `--version` from the same shell
 # `execFile` uses catches venv PATH drift, package renames, and image
-# misconfigurations before any user hits them.
+# misconfigurations before any user request hits them.
 if ! docker exec youtube-ai-service whisper-ctranslate2 --version >/dev/null 2>&1; then
   echo "[smoke] FAIL: whisper-ctranslate2 not reachable from app container"
   docker exec youtube-ai-service whisper-ctranslate2 --version 2>&1 | tail -5 || true
@@ -52,6 +52,42 @@ if ! docker exec youtube-ai-service node -e "require('http').get('http://127.0.0
   exit 1
 fi
 echo "[smoke] OK: pot-provider /ping returned 200"
+
+echo "[smoke] captions: end-to-end fetch for a known-captioned public video"
+# Asserts three invariants at once: residential egress is routing
+# (youtube-transcript-plus can reach YouTube), YouTube does not treat
+# the caller as a datacenter (caption tracks aren't stripped from the
+# watch-page response), and the route's 200 contract holds. A failure
+# here means the cheap caption path is degraded and the expensive
+# Whisper path will start carrying traffic it shouldn't.
+# Guard: if VPS_API_KEY isn't injected into compose env, the smoke
+# would fail with a misleading 401.
+if ! docker exec youtube-ai-service sh -c '[ -n "$VPS_API_KEY" ]'; then
+  echo "[smoke] FAIL: VPS_API_KEY not populated in youtube-ai-service container env"
+  exit 1
+fi
+if ! docker exec youtube-ai-service node -e "
+const url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+fetch('http://localhost:3001/captions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + process.env.VPS_API_KEY,
+  },
+  body: JSON.stringify({ youtube_url: url }),
+}).then(async r => {
+  if (!r.ok) { console.error('status', r.status, await r.text()); process.exit(1); }
+  const j = await r.json();
+  if (!j.transcript || j.transcript.length < 50) {
+    console.error('transcript too short:', j.transcript?.length); process.exit(1);
+  }
+  process.exit(0);
+}).catch(e => { console.error(e.message); process.exit(1); });
+" 2>&1; then
+  echo "[smoke] FAIL: /captions end-to-end check failed"
+  exit 1
+fi
+echo "[smoke] OK: /captions returned a real transcript"
 
 echo "[smoke] yt-dlp: end-to-end extraction of a known-captioned public video"
 # `--dump-json --skip-download` exercises the full extraction path — player_client

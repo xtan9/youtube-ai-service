@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { health } from "./routes/health.js";
 import { transcribe } from "./routes/transcribe.js";
-import { authMiddleware } from "./middleware/auth.js";
+import { captions } from "./routes/captions.js";
 
 const app = new Hono();
 
@@ -12,9 +12,13 @@ app.use("*", logger());
 // Health check — no auth required
 app.route("/", health);
 
-// Transcription — requires auth
-app.use("/transcribe", authMiddleware);
-app.route("/", transcribe);
+// Both data endpoints egress through the Tailscale exit node so YouTube
+// sees a residential IP. Auth middleware is attached inside each router
+// with `use("*", authMiddleware)` — mounting at the prefixed path (not
+// at `/`) is required for that `*` to actually scope to the sub-router's
+// path. Mounting at `/` would make auth fire on /health too.
+app.route("/transcribe", transcribe);
+app.route("/captions", captions);
 
 const port = parseInt(process.env.PORT || "3001", 10);
 
