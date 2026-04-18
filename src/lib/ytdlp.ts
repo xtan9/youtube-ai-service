@@ -4,6 +4,17 @@ import { unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
+// Datacenter IPs frequently hit YouTube's "Sign in to confirm you're not a
+// bot" wall when yt-dlp uses the default `web` player client. Cycling
+// through alternate clients (mweb / web_safari / android_vr) unblocks most
+// requests at zero extra cost. If YouTube escalates and these also fail,
+// the next lever is a cookies.txt from a logged-in throwaway account.
+const YOUTUBE_PLAYER_CLIENTS = "web_safari,mweb,android_vr";
+
+// Pair the client list with a browser UA so the request profile matches.
+const SAFARI_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+
 export function buildYtdlpArgs(url: string, outputPath: string): string[] {
   return [
     "--extract-audio",
@@ -12,6 +23,10 @@ export function buildYtdlpArgs(url: string, outputPath: string): string[] {
     "--audio-quality",
     "0",
     "--no-playlist",
+    "--extractor-args",
+    `youtube:player_client=${YOUTUBE_PLAYER_CLIENTS}`,
+    "--user-agent",
+    SAFARI_USER_AGENT,
     "-o",
     outputPath,
     url,

@@ -10,10 +10,16 @@ RUN npx tsc
 FROM node:22-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip python3-venv ffmpeg \
+    python3 python3-pip python3-venv ffmpeg curl unzip ca-certificates \
     && python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir faster-whisper yt-dlp \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install deno — yt-dlp warns "No supported JavaScript runtime could be
+# found" without it, and some newer YouTube player clients need JS to
+# solve nonce/signature challenges during extraction.
+RUN curl -fsSL https://deno.land/install.sh | sh -s -- --yes \
+    && mv /root/.deno/bin/deno /usr/local/bin/deno
 
 ENV PATH="/opt/venv/bin:$PATH"
 

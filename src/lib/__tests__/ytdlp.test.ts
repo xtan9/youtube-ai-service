@@ -14,4 +14,22 @@ describe("buildYtdlpArgs", () => {
     expect(args).toContain("/tmp/audio.mp3");
     expect(args).toContain("https://www.youtube.com/watch?v=test123");
   });
+
+  it("passes alternate player_client list so datacenter IPs avoid the default web client's bot-check", () => {
+    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const extractorArgsIdx = args.indexOf("--extractor-args");
+    expect(extractorArgsIdx).toBeGreaterThan(-1);
+    const value = args[extractorArgsIdx + 1];
+    expect(value).toMatch(/^youtube:player_client=/);
+    // Must include at least one non-web client so a web-specific block
+    // doesn't take the whole path down.
+    expect(value).toMatch(/mweb|android|safari|ios/);
+  });
+
+  it("sets a browser User-Agent matching the player_client profile", () => {
+    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const uaIdx = args.indexOf("--user-agent");
+    expect(uaIdx).toBeGreaterThan(-1);
+    expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
+  });
 });
