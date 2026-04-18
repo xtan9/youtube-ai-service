@@ -1,10 +1,97 @@
 services:
+  # Scoped Tailscale client. Joins the tailnet in exit-node-client mode so
+  # anything sharing this container's network namespace egresses via the
+  # configured exit node (a residential home device). The VPS host's normal
+  # IP is unaffected — only containers using `network_mode: service:tailscale-exit`
+  # route through the exit node. This restores the residential-IP property
+  # that YouTube's bot-wall heuristic relies on to let traffic through.
+  #
+  # `TS_USERSPACE=false` + `NET_ADMIN` + `NET_RAW` + `/dev/net/tun` put the
+  # client in kernel-networking mode. Userspace mode would drop the caps
+  # requirement but adds meaningful latency per request and occasionally
+  # drops long-running connections — not worth it for this use.
+  tailscale-exit:
+    image: tailscale/tailscale:v1.96.5
+    container_name: yt-ai-tailscale-exit
+    hostname: youtube-ai-vps-egress
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      # TS_EXIT_NODE_HOSTNAME is duplicated here (not just interpolated into
+      # TS_EXTRA_ARGS) so the container env can expose it to the healthcheck
+      # script, which needs to `tailscale ping` the exit node by name.
+      - TS_EXIT_NODE_HOSTNAME=${TS_EXIT_NODE_HOSTNAME}
+      - TS_EXTRA_ARGS=--exit-node=${TS_EXIT_NODE_HOSTNAME} --exit-node-allow-lan-access=true --ssh=false
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    # Port 3001 is bound here because youtube-ai-service shares this
+    # container's network namespace — published ports must be declared on
+    # the namespace-owner, not the service using `network_mode: service:...`.
+    # Keep in sync with the app's internal PORT env.
+    ports:
+      - "${PORT:-3001}:3001"
+    healthcheck:
+      # Two-stage check: tailscaled must be authenticated AND the exit node
+      # must respond to a WireGuard ping. `tailscale status` alone returns
+      # 0 as soon as the local backend is Running — it does NOT verify the
+      # exit-node peer is online, which means services gated on its exit
+      # would start up with traffic falling through to the VPS IP (the
+      # datacenter-bot-wall condition this whole stack exists to prevent).
+      # `tailscale ping` sends a real WireGuard packet via DERP/direct; it
+      # returns non-zero if the peer is offline or the route is broken.
+      test:
+        - CMD-SHELL
+        - >-
+          tailscale status --peers=false >/dev/null 2>&1
+          && tailscale ping --timeout=5s --c=1 "$$TS_EXIT_NODE_HOSTNAME" >/dev/null 2>&1
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 45s
+    restart: unless-stopped
+
+  # Generates Proof-of-Origin tokens locally via BotGuard simulation. Runs
+  # inside the tailscale-exit namespace so its own calls to Google's attestation
+  # endpoint also egress from the home IP — presenting a consistent caller
+  # identity across PO Token fetch and subsequent yt-dlp requests.
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+    container_name: yt-ai-pot-provider
+    network_mode: "service:tailscale-exit"
+    depends_on:
+      tailscale-exit:
+        condition: service_healthy
+    healthcheck:
+      # Verifies the HTTP listener on :4416 is actually accepting requests.
+      # `service_started` alone fires the instant the process forks — the
+      # port may not be bound yet, causing the first yt-dlp call to race.
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:4416/ping', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+
   youtube-ai-service:
     build: .
     container_name: youtube-ai-service
     restart: unless-stopped
-    ports:
-      - "${PORT:-3001}:3001"
+    # Share tailscale-exit's network stack. This makes:
+    #   - yt-dlp egress go through the home IP (dodges datacenter bot-wall)
+    #   - `pot-provider` reachable on 127.0.0.1:4416 (shared namespace)
+    #   - `ports:` declarations invalid here (they live on tailscale-exit)
+    network_mode: "service:tailscale-exit"
+    depends_on:
+      tailscale-exit:
+        condition: service_healthy
+      pot-provider:
+        condition: service_healthy
     environment:
       - VPS_API_KEY=${VPS_API_KEY}
       - PORT=3001
@@ -14,3 +101,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+volumes:
+  tailscale-state:
