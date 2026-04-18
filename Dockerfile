@@ -20,11 +20,16 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # plugin returns no PO Token and yt-dlp falls back to no-PO-Token mode,
 # which YouTube rejects for player responses.
 ARG BGUTIL_POT_VERSION=1.3.1
+# `whisper-ctranslate2` is the CLI wrapper that `src/lib/whisper.ts` invokes
+# (`faster-whisper` the pip package ships no binary — just the Python
+# library — which is why a naive `pip install faster-whisper` leaves a
+# latent ENOENT at transcribe time). whisper-ctranslate2 depends on
+# faster-whisper so the underlying runtime is identical.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv ffmpeg curl unzip ca-certificates \
     && python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir \
-        faster-whisper \
+        whisper-ctranslate2 \
         yt-dlp \
         "bgutil-ytdlp-pot-provider==${BGUTIL_POT_VERSION}" \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
