@@ -24,17 +24,38 @@ docker compose build
 echo "Restarting stack (youtube-ai-service + tailscale-exit + pot-provider)..."
 docker compose up -d
 
-echo "Waiting for health check..."
-sleep 10
+# Poll `youtube-ai-service` health until it resolves one way or the other.
+# Replaces the old `sleep 10 && snapshot` pattern which mis-classified a
+# still-starting container (start_period=20s) as a failed deploy and
+# opened a spurious GitHub issue on every slow boot.
+echo "Waiting for youtube-ai-service to become healthy..."
+deadline=$(( SECONDS + 180 ))
+while (( SECONDS < deadline )); do
+  health="$(docker inspect --format='{{.State.Health.Status}}' youtube-ai-service 2>/dev/null || echo missing)"
+  case "$health" in
+    healthy) break ;;
+    unhealthy)
+      echo "youtube-ai-service reported unhealthy"
+      docker compose logs --tail 60
+      exit 1
+      ;;
+    missing)
+      echo "youtube-ai-service container not found (docker inspect failed)"
+      docker compose ps
+      exit 1
+      ;;
+    # starting|"" — keep polling
+  esac
+  sleep 3
+done
 
-# Pin the health check to the youtube-ai-service container specifically.
-# `docker compose ps | grep healthy` would match any sidecar with a
-# healthcheck (there may be more in future), masking an unhealthy app.
-health="$(docker inspect --format='{{.State.Health.Status}}' youtube-ai-service 2>/dev/null || echo missing)"
-if [[ "$health" == "healthy" ]]; then
-  echo "Deploy successful - youtube-ai-service healthy"
-else
-  echo "WARNING: youtube-ai-service health=$health"
-  docker compose logs --tail 40
+if [[ "$health" != "healthy" ]]; then
+  echo "Timed out waiting for youtube-ai-service to become healthy (last=$health)"
+  docker compose logs --tail 60
   exit 1
 fi
+
+echo "youtube-ai-service healthy. Running post-deploy smoke tests..."
+./scripts/post-deploy-smoke.sh
+
+echo "Deploy successful"

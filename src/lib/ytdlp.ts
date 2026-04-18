@@ -18,9 +18,11 @@ const SAFARI_USER_AGENT =
 // Proof-of-Origin Token provider. `pot-provider` is the sibling container
 // (see docker-compose.yml) that shares our network namespace, so it's
 // reachable on localhost. YouTube enforces PO Tokens across multiple
-// extraction paths as of 2026 — without this, requests fail regardless of
-// IP reputation or cookie state.
-const POT_PROVIDER_URL = "http://127.0.0.1:4416";
+// extraction paths — without this, requests fail regardless of IP
+// reputation or cookie state. Override via env for local dev or if the
+// sidecar's bind address changes.
+export const POT_PROVIDER_URL =
+  process.env.POT_PROVIDER_URL ?? "http://127.0.0.1:4416";
 
 export function buildYtdlpArgs(url: string, outputPath: string): string[] {
   return [
@@ -67,9 +69,13 @@ export async function downloadAudio(youtubeUrl: string): Promise<string> {
   let size: number;
   try {
     size = (await stat(outputPath)).size;
-  } catch {
+  } catch (statErr) {
+    // Preserve the original stat failure as `cause` so EACCES/ENAMETOOLONG
+    // (rare but real on full disks / hostile tmp setups) don't get
+    // misattributed to "no file produced".
     throw new Error(
-      `yt-dlp exited 0 but produced no file at ${outputPath} (stderr: ${stderr.slice(0, 500)})`
+      `yt-dlp exited 0 but stat of ${outputPath} failed (stderr: ${stderr.slice(0, 500)})`,
+      { cause: statErr }
     );
   }
   if (size === 0) {

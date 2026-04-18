@@ -17,7 +17,7 @@ Three containers in one compose stack:
 
 1. **`youtube-ai-service`** — the Node/Hono app itself
 2. **`tailscale-exit`** — scoped Tailscale client. Routes all yt-dlp egress through a residential home device (exit node) so YouTube's datacenter-IP bot-wall doesn't fire
-3. **`pot-provider`** — generates Proof-of-Origin tokens (`brainicism/bgutil-ytdlp-pot-provider`) that YouTube requires for many extraction paths as of 2026
+3. **`pot-provider`** — generates Proof-of-Origin tokens (`brainicism/bgutil-ytdlp-pot-provider`) that YouTube requires on many extraction paths
 
 `youtube-ai-service` and `pot-provider` share `tailscale-exit`'s network namespace (`network_mode: service:tailscale-exit`), so:
 - All three egress through the exit node (consistent caller identity)

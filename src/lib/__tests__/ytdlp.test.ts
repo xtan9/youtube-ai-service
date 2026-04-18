@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildYtdlpArgs } from "../ytdlp.js";
+import { buildYtdlpArgs, POT_PROVIDER_URL } from "../ytdlp.js";
 
 describe("buildYtdlpArgs", () => {
   it("builds correct yt-dlp arguments", () => {
@@ -39,12 +39,25 @@ describe("buildYtdlpArgs", () => {
     expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
   });
 
-  it("configures the PO Token provider so yt-dlp can satisfy YouTube's 2026 attestation requirement", () => {
+  it("configures the PO Token provider so yt-dlp can satisfy YouTube's attestation requirement", () => {
     // Missing this arg means yt-dlp falls back to no-PO-Token mode, which
     // YouTube rejects for player responses regardless of IP or cookies.
     const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
-    const potArg = args.find((a) => a.startsWith("youtubepot-bgutilhttp:"));
-    expect(potArg).toBeDefined();
-    expect(potArg).toMatch(/base_url=http:\/\/[^\s]+:\d+$/);
+    const potArgValues = args
+      .map((a, i) => (a === "--extractor-args" ? args[i + 1] : null))
+      .filter((v): v is string => v !== null);
+
+    // Two pairs: youtube:player_client=... and youtubepot-bgutilhttp:...
+    // If someone deletes the player_client line, the player_client cascade
+    // disappears and videos fail silently. Pin the count to catch that.
+    expect(potArgValues).toHaveLength(2);
+
+    // Exact equality against the exported constant so a URL typo, scheme
+    // change, or hostname drift (e.g. switching to service DNS, which
+    // wouldn't resolve in the shared namespace) fails the test instead of
+    // passing a regex that only checks shape.
+    expect(potArgValues).toContain(
+      `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`
+    );
   });
 });
