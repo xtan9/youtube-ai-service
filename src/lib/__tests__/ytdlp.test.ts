@@ -38,4 +38,13 @@ describe("buildYtdlpArgs", () => {
     expect(uaIdx).toBeGreaterThan(-1);
     expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
   });
+
+  it("configures the PO Token provider so yt-dlp can satisfy YouTube's 2026 attestation requirement", () => {
+    // Missing this arg means yt-dlp falls back to no-PO-Token mode, which
+    // YouTube rejects for player responses regardless of IP or cookies.
+    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const potArg = args.find((a) => a.startsWith("youtubepot-bgutilhttp:"));
+    expect(potArg).toBeDefined();
+    expect(potArg).toMatch(/base_url=http:\/\/[^\s]+:\d+$/);
+  });
 });

@@ -17,8 +17,17 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv ffmpeg curl unzip ca-certificates \
     && python3 -m venv /opt/venv \
-    && /opt/venv/bin/pip install --no-cache-dir faster-whisper yt-dlp \
+    && /opt/venv/bin/pip install --no-cache-dir \
+        faster-whisper \
+        yt-dlp \
+        bgutil-ytdlp-pot-provider \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# `bgutil-ytdlp-pot-provider` is a yt-dlp plugin that fetches Proof-of-Origin
+# tokens from the `pot-provider` sidecar container (see docker-compose.yml).
+# YouTube began enforcing PO Tokens across multiple extraction paths in 2026;
+# without them even cookied requests fail on many video IDs. Pairs with the
+# `--extractor-args youtubepot-bgutilhttp:base_url=...` flag in ytdlp.ts.
 
 # Install deno — yt-dlp warns "No supported JavaScript runtime could be
 # found" without it, and some newer YouTube player clients need JS to

@@ -21,16 +21,20 @@ cd "$(dirname "$0")/.."
 echo "Building youtube-ai-service image..."
 docker compose build
 
-echo "Restarting container..."
+echo "Restarting stack (youtube-ai-service + tailscale-exit + pot-provider)..."
 docker compose up -d
 
 echo "Waiting for health check..."
 sleep 10
 
-if docker compose ps | grep -q "healthy"; then
-  echo "Deploy successful - container healthy"
+# Pin the health check to the youtube-ai-service container specifically.
+# `docker compose ps | grep healthy` would match any sidecar with a
+# healthcheck (there may be more in future), masking an unhealthy app.
+health="$(docker inspect --format='{{.State.Health.Status}}' youtube-ai-service 2>/dev/null || echo missing)"
+if [[ "$health" == "healthy" ]]; then
+  echo "Deploy successful - youtube-ai-service healthy"
 else
-  echo "WARNING: Container not yet healthy"
-  docker compose logs --tail 20
+  echo "WARNING: youtube-ai-service health=$health"
+  docker compose logs --tail 40
   exit 1
 fi

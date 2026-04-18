@@ -7,13 +7,20 @@ import { join } from "path";
 // Datacenter IPs frequently hit YouTube's "Sign in to confirm you're not a
 // bot" wall when yt-dlp uses the default `web` player client. Cycling
 // through alternate clients (mweb / web_safari / android_vr) unblocks most
-// requests at zero extra cost. If YouTube escalates and these also fail,
-// the next lever is a cookies.txt from a logged-in throwaway account.
+// requests when combined with a residential-IP egress path (Tailscale exit
+// node → home device, wired in docker-compose.yml).
 const YOUTUBE_PLAYER_CLIENTS = "web_safari,mweb,android_vr";
 
 // Pair the client list with a browser UA so the request profile matches.
 const SAFARI_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+
+// Proof-of-Origin Token provider. `pot-provider` is the sibling container
+// (see docker-compose.yml) that shares our network namespace, so it's
+// reachable on localhost. YouTube enforces PO Tokens across multiple
+// extraction paths as of 2026 — without this, requests fail regardless of
+// IP reputation or cookie state.
+const POT_PROVIDER_URL = "http://127.0.0.1:4416";
 
 export function buildYtdlpArgs(url: string, outputPath: string): string[] {
   return [
@@ -25,6 +32,8 @@ export function buildYtdlpArgs(url: string, outputPath: string): string[] {
     "--no-playlist",
     "--extractor-args",
     `youtube:player_client=${YOUTUBE_PLAYER_CLIENTS}`,
+    "--extractor-args",
+    `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`,
     "--user-agent",
     SAFARI_USER_AGENT,
     "-o",

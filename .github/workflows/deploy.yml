@@ -42,16 +42,28 @@ jobs:
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1
+        env:
+          # Tailscale + PO-Token sidecar config. Passed through to the VPS
+          # so docker-compose can substitute them at container-start time.
+          # `.env` on the VPS is the canonical source — we write it here
+          # instead of env files in the repo so authkeys can rotate without
+          # a code change.
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+          TS_EXIT_NODE_HOSTNAME: ${{ secrets.TS_EXIT_NODE_HOSTNAME }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: DEPLOY_SHA
+          envs: DEPLOY_SHA,TS_AUTHKEY,TS_EXIT_NODE_HOSTNAME
           script: |
             set -euo pipefail
             cd /opt/youtube-ai-service
             git fetch --quiet origin "$DEPLOY_SHA"
             git checkout --quiet --detach "$DEPLOY_SHA"
+            # Refresh the Tailscale-related entries in .env without clobbering
+            # unrelated settings (VPS_API_KEY, etc.). awk rewrites the matching
+            # keys in-place and appends them if absent.
+            ./scripts/update-env.sh TS_AUTHKEY="$TS_AUTHKEY" TS_EXIT_NODE_HOSTNAME="$TS_EXIT_NODE_HOSTNAME"
             ./scripts/deploy.sh
 
       # `workflow_run`-triggered failures don't surface on the PR/commit
