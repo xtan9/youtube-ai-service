@@ -1,3 +1,5 @@
+// Must run before any HTTP client is created — see prefer-ipv4.ts for why.
+import "./lib/prefer-ipv4.js";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
