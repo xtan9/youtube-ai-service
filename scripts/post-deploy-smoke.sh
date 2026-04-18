@@ -32,6 +32,19 @@ if [[ "$container_ip" == "$vps_ip" ]]; then
 fi
 echo "[smoke] OK: VPS egress=$vps_ip, container egress=$container_ip (residential)"
 
+echo "[smoke] whisper-ctranslate2: verifying the CLI binary is on PATH inside the app container"
+# The original transcribe outage (PR #6) was a latent ENOENT on a missing
+# CLI — pip installed `faster-whisper` the library, but no `faster-whisper`
+# binary existed. Verifying `--version` from a shell that matches the one
+# `execFile` uses catches venv PATH drift, package renames, and image
+# misconfigurations before any user hits them.
+if ! docker exec youtube-ai-service whisper-ctranslate2 --version >/dev/null 2>&1; then
+  echo "[smoke] FAIL: whisper-ctranslate2 not reachable from app container"
+  docker exec youtube-ai-service whisper-ctranslate2 --version 2>&1 | tail -5 || true
+  exit 1
+fi
+echo "[smoke] OK: whisper-ctranslate2 reachable"
+
 echo "[smoke] pot-provider: verifying HTTP listener is reachable from the app container"
 if ! docker exec youtube-ai-service node -e "require('http').get('http://127.0.0.1:4416/ping', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"; then
   echo "[smoke] FAIL: pot-provider /ping not reachable from app container"
