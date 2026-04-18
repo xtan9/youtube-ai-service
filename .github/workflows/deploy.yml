@@ -1,15 +1,33 @@
 name: Deploy
 
+# Chained off CI so a merge that breaks tests or typecheck cannot reach
+# the VPS. `workflow_dispatch` stays available for manual replays but is
+# restricted to `main` so it can't be used to push feature-branch code
+# to prod.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: vps-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1
