@@ -115,7 +115,18 @@ export async function fetchCaptions(
   }
 
   const { segments, videoDetails } = result;
-  if (!segments || segments.length === 0) return null;
+  if (!segments || segments.length === 0) {
+    // Library reported success but handed back no segments. Usually this
+    // means the video genuinely has no captions, but a YouTube schema
+    // shift ("segments array now lives under .tracks") could hit this
+    // path silently. Log so a rising rate is detectable before a wave
+    // of unnecessary Whisper fallbacks hits the compute bill.
+    console.warn("[captions] empty segments array, treating as no_captions", {
+      errorId: "CAPTION_EMPTY_SEGMENTS",
+      videoId,
+    });
+    return null;
+  }
 
   const transcript = segments
     .map((s) => s.text)
@@ -123,7 +134,16 @@ export async function fetchCaptions(
     .replace(/\s+/g, " ")
     .trim();
 
-  if (!transcript) return null;
+  if (!transcript) {
+    // All segments were whitespace-only. Rare but real (music-cue
+    // videos). Log for the same reason as the empty-segments branch.
+    console.warn("[captions] whitespace-only transcript, treating as no_captions", {
+      errorId: "CAPTION_EMPTY_TRANSCRIPT",
+      videoId,
+      segmentCount: segments.length,
+    });
+    return null;
+  }
 
   return {
     transcript,

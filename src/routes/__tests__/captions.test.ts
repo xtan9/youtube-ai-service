@@ -6,7 +6,7 @@ import * as captionsLib from "../../lib/captions.js";
 // also exercised via a dedicated block below.
 const VALID_KEY = "test-key";
 
-function post(body: unknown, path = "/captions") {
+function post(body: unknown, path = "/") {
   return captions.request(path, {
     method: "POST",
     headers: {
@@ -37,7 +37,7 @@ describe("POST /captions", () => {
     // Hono's default behavior is to throw on c.req.json() failure, which
     // becomes a 500. The endpoint overrides that so a malformed request
     // body is classified as client error rather than service error.
-    const res = await captions.request("/captions", {
+    const res = await captions.request("/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -120,7 +120,7 @@ describe("POST /captions — auth enforcement", () => {
   });
 
   it("returns 401 without an Authorization header", async () => {
-    const res = await captions.request("/captions", {
+    const res = await captions.request("/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -131,7 +131,7 @@ describe("POST /captions — auth enforcement", () => {
   });
 
   it("returns 403 on a wrong bearer token", async () => {
-    const res = await captions.request("/captions", {
+    const res = await captions.request("/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

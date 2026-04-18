@@ -182,18 +182,35 @@ describe("fetchCaptions", () => {
     );
   });
 
-  it("returns null when the library reports zero segments", async () => {
+  it("returns null AND logs CAPTION_EMPTY_SEGMENTS when the library reports zero segments", async () => {
+    // The log is the tripwire for YouTube schema drift: if a rate of
+    // these spikes, we start paying for Whisper on videos that still
+    // have captions. Pin the errorId so a future refactor can't drop it.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockedFetchTranscript.mockResolvedValue(ok([]));
     expect(await fetchCaptions("https://youtu.be/dQw4w9WgXcQ")).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("empty segments"),
+      expect.objectContaining({
+        errorId: "CAPTION_EMPTY_SEGMENTS",
+        videoId: "dQw4w9WgXcQ",
+      })
+    );
   });
 
-  it("returns null when segments join to an empty transcript (whitespace-only)", async () => {
-    // Real-world: a short video with a single segment that's just music
-    // cues ("   " or "\n") — the library yields segments but no content.
+  it("returns null AND logs CAPTION_EMPTY_TRANSCRIPT when segments join to whitespace", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockedFetchTranscript.mockResolvedValue(
       ok([{ text: "   ", lang: "en" }, { text: "\n", lang: "en" }])
     );
     expect(await fetchCaptions("https://youtu.be/dQw4w9WgXcQ")).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("whitespace-only"),
+      expect.objectContaining({
+        errorId: "CAPTION_EMPTY_TRANSCRIPT",
+        videoId: "dQw4w9WgXcQ",
+      })
+    );
   });
 
   it("joins multi-segment transcripts and normalizes whitespace", async () => {

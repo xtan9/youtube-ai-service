@@ -6,16 +6,18 @@ import { authMiddleware } from "../middleware/auth.js";
 const captions = new Hono();
 
 // Attach auth inside the sub-router so every path served by this router
-// — current and future — is protected by default. Wiring auth by path
-// prefix at the app level would silently bypass auth on a future
-// sub-route like /captions/languages.
+// — current and future — is protected by default. For the scope to work
+// correctly, this sub-router is mounted at `app.route("/captions", captions)`
+// in index.ts (NOT at `/`), so `*` only matches paths under /captions.
+// Mounting at `/` would make this middleware fire on /health and every
+// other app path.
 captions.use("*", authMiddleware);
 
 const requestSchema = z.object({
   youtube_url: z.string().url(),
 });
 
-captions.post("/captions", async (c) => {
+captions.post("/", async (c) => {
   let body: unknown;
   try {
     body = await c.req.json();
@@ -50,11 +52,13 @@ captions.post("/captions", async (c) => {
 
     return c.json(result);
   } catch (err) {
-    // Real err.message stays in logs above; client sees a generic string
-    // so raw library internals aren't echoed back to the browser.
+    // Real err.message stays in logs; client sees a generic string so raw
+    // library internals aren't echoed back to the browser. Include the
+    // youtube_url so a grep against only route-level errors can still
+    // correlate the failure with the specific video.
     const message =
       err instanceof Error ? err.message : "Caption fetch failed";
-    console.error(`Caption fetch error: ${message}`);
+    console.error(`Caption fetch error for ${youtube_url}: ${message}`);
     return c.json({ error: "Internal error" }, 500);
   }
 });

@@ -14,9 +14,11 @@ app.route("/", health);
 
 // Both data endpoints egress through the Tailscale exit node so YouTube
 // sees a residential IP. Auth middleware is attached inside each router
-// (not here) so future sub-routes can't bypass it.
-app.route("/", transcribe);
-app.route("/", captions);
+// with `use("*", authMiddleware)` — mounting at the prefixed path (not
+// at `/`) is required for that `*` to actually scope to the sub-router's
+// path. Mounting at `/` would make auth fire on /health too.
+app.route("/transcribe", transcribe);
+app.route("/captions", captions);
 
 const port = parseInt(process.env.PORT || "3001", 10);
 
