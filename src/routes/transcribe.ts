@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { downloadAudio, cleanupAudio } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/whisper.js";
+import { extractVideoId } from "../lib/captions.js";
+import { youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 
 const transcribe = new Hono();
@@ -13,7 +15,7 @@ const transcribe = new Hono();
 transcribe.use("*", authMiddleware);
 
 const requestSchema = z.object({
-  youtube_url: z.string().url(),
+  youtube_url: youtubeUrlSchema,
 });
 
 transcribe.post("/", async (c) => {
@@ -36,10 +38,11 @@ transcribe.post("/", async (c) => {
   }
 
   const { youtube_url } = parsed.data;
+  const videoId = extractVideoId(youtube_url) ?? "unknown";
   let audioPath: string | null = null;
 
   try {
-    console.log(`Transcribing: ${youtube_url}`);
+    console.log(`Transcribing video ${videoId}`);
 
     audioPath = await downloadAudio(youtube_url);
     console.log(`Audio downloaded to: ${audioPath}`);
@@ -53,9 +56,13 @@ transcribe.post("/", async (c) => {
       source: "whisper" as const,
     });
   } catch (err) {
+    // Real err.message (which embeds yt-dlp / whisper-ctranslate2 stderr
+    // — tmp paths, binary names, verbose extractor output) stays in the
+    // server log. Client sees a generic string so child-process internals
+    // aren't echoed to the browser.
     const message = err instanceof Error ? err.message : "Transcription failed";
-    console.error(`Transcription error for ${youtube_url}: ${message}`);
-    return c.json({ error: message }, 500);
+    console.error(`Transcription error for video ${videoId}: ${message}`);
+    return c.json({ error: "Transcription failed" }, 500);
   } finally {
     if (audioPath) {
       await cleanupAudio(audioPath);

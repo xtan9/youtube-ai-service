@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { fetchCaptions } from "../lib/captions.js";
+import { fetchCaptions, extractVideoId } from "../lib/captions.js";
+import { youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 
 const captions = new Hono();
@@ -14,7 +15,7 @@ const captions = new Hono();
 captions.use("*", authMiddleware);
 
 const requestSchema = z.object({
-  youtube_url: z.string().url(),
+  youtube_url: youtubeUrlSchema,
 });
 
 captions.post("/", async (c) => {
@@ -38,8 +39,14 @@ captions.post("/", async (c) => {
 
   const { youtube_url } = parsed.data;
 
+  // Log only the videoId, never the full URL. YouTube URLs are unlikely
+  // to contain secrets in practice, but the zod schema above only
+  // constrains the host — tracker/analytics query strings the frontend
+  // might append would still land in the log aggregator verbatim.
+  const videoId = extractVideoId(youtube_url) ?? "unknown";
+
   try {
-    console.log(`Fetching captions: ${youtube_url}`);
+    console.log(`Fetching captions for video ${videoId}`);
     const result = await fetchCaptions(youtube_url);
 
     // Status contract this route owes its consumers:
@@ -52,13 +59,9 @@ captions.post("/", async (c) => {
 
     return c.json(result);
   } catch (err) {
-    // Real err.message stays in logs; client sees a generic string so raw
-    // library internals aren't echoed back to the browser. Include the
-    // youtube_url so a grep against only route-level errors can still
-    // correlate the failure with the specific video.
     const message =
       err instanceof Error ? err.message : "Caption fetch failed";
-    console.error(`Caption fetch error for ${youtube_url}: ${message}`);
+    console.error(`Caption fetch error for video ${videoId}: ${message}`);
     return c.json({ error: "Internal error" }, 500);
   }
 });
