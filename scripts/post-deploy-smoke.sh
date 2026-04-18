@@ -53,6 +53,35 @@ if ! docker exec youtube-ai-service node -e "require('http').get('http://127.0.0
 fi
 echo "[smoke] OK: pot-provider /ping returned 200"
 
+echo "[smoke] captions: end-to-end fetch for a known-captioned public video"
+# Validates the whole caption path — youtube-transcript-plus library can
+# reach YouTube from inside the container (only true if residential
+# egress is routing), YouTube returns caption metadata (only true if
+# YouTube doesn't see us as a datacenter IP), and our route returns 200.
+# The frontend relies on this path to avoid paid Whisper calls.
+if ! docker exec youtube-ai-service node -e "
+const url = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+fetch('http://localhost:3001/captions', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + process.env.VPS_API_KEY,
+  },
+  body: JSON.stringify({ youtube_url: url }),
+}).then(async r => {
+  if (!r.ok) { console.error('status', r.status, await r.text()); process.exit(1); }
+  const j = await r.json();
+  if (!j.transcript || j.transcript.length < 50) {
+    console.error('transcript too short:', j.transcript?.length); process.exit(1);
+  }
+  process.exit(0);
+}).catch(e => { console.error(e.message); process.exit(1); });
+" 2>&1; then
+  echo "[smoke] FAIL: /captions end-to-end check failed"
+  exit 1
+fi
+echo "[smoke] OK: /captions returned a real transcript"
+
 echo "[smoke] yt-dlp: end-to-end extraction of a known-captioned public video"
 # `--dump-json --skip-download` exercises the full extraction path — player_client
 # cascade, PO Token fetch, signature decoding — without actually downloading
