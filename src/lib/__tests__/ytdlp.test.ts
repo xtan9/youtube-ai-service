@@ -14,4 +14,28 @@ describe("buildYtdlpArgs", () => {
     expect(args).toContain("/tmp/audio.mp3");
     expect(args).toContain("https://www.youtube.com/watch?v=test123");
   });
+
+  it("never tries the default `web` client first (it's the one hit by the datacenter-IP bot-wall)", () => {
+    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const extractorArgsIdx = args.indexOf("--extractor-args");
+    expect(extractorArgsIdx).toBeGreaterThan(-1);
+    const value = args[extractorArgsIdx + 1];
+    expect(value).toMatch(/^youtube:player_client=/);
+
+    const clients = value
+      .replace(/^youtube:player_client=/, "")
+      .split(",")
+      .map((c) => c.trim());
+    expect(clients.length).toBeGreaterThan(0);
+    // Plain "web" in the first slot would silently re-introduce the
+    // blocked client. Variants like web_safari are fine.
+    expect(clients[0]).not.toBe("web");
+  });
+
+  it("sets a browser User-Agent matching the player_client profile", () => {
+    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const uaIdx = args.indexOf("--user-agent");
+    expect(uaIdx).toBeGreaterThan(-1);
+    expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
+  });
 });
