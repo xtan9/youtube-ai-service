@@ -24,10 +24,16 @@ jobs:
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
+    env:
+      # Pin the VPS to the exact commit CI validated. Without this, the
+      # VPS-side `git pull` could fetch a newer commit that hasn't been
+      # through CI when two merges land close together.
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ env.DEPLOY_SHA }}
 
       - name: Deploy to server
         uses: appleboy/ssh-action@v1
@@ -35,7 +41,34 @@ jobs:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: DEPLOY_SHA
           script: |
+            set -euo pipefail
             cd /opt/youtube-ai-service
-            git pull --quiet
+            git fetch --quiet origin "$DEPLOY_SHA"
+            git checkout --quiet --detach "$DEPLOY_SHA"
             ./scripts/deploy.sh
+
+      # `workflow_run`-triggered failures don't surface on the PR/commit
+      # status UI. Open an issue so a busted deploy can't sit unnoticed.
+      - name: Open issue on deploy failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = process.env.DEPLOY_SHA;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Deploy failed for ${sha.slice(0, 7)}`,
+              body: [
+                `Deploy workflow failed.`,
+                ``,
+                `- Commit: ${sha}`,
+                `- Run: ${runUrl}`,
+                ``,
+                `VPS state may be on the previous commit; investigate before merging further changes.`,
+              ].join("\n"),
+              labels: ["deploy-failure"],
+            });
