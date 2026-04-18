@@ -24,6 +24,11 @@ jobs:
        github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
+    # Default GITHUB_TOKEN on repos created after Feb 2023 is read-only.
+    # `issues: write` is required for the failure-alert step below.
+    permissions:
+      contents: read
+      issues: write
     env:
       # Pin the VPS to the exact commit CI validated. Without this, the
       # VPS-side `git pull` could fetch a newer commit that hasn't been
@@ -56,12 +61,16 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const sha = process.env.DEPLOY_SHA;
+            // Fall back through every source so the alert can't crash
+            // on a missing env — the alert's job is to surface failure,
+            // not become one.
+            const sha = process.env.DEPLOY_SHA || context.sha || "unknown";
+            const shortSha = sha === "unknown" ? "unknown" : sha.slice(0, 7);
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `Deploy failed for ${sha.slice(0, 7)}`,
+              title: `Deploy failed for ${shortSha}`,
               body: [
                 `Deploy workflow failed.`,
                 ``,
