@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, cpSync } from "fs";
@@ -38,7 +38,10 @@ describe("update-env.sh", () => {
     repo = fake.repo;
     script = fake.script;
     envPath = fake.envPath;
-    return () => rmSync(repo, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
   });
 
   it("appends a new KEY=VALUE when absent", async () => {
@@ -62,8 +65,8 @@ describe("update-env.sh", () => {
   });
 
   it("preserves `=` characters inside values (base64 padding, URLs with query strings)", async () => {
-    // This is the awk-FS-OFS bug the review flagged: a value like "a=b=c"
-    // must survive round-trip, not get truncated to the first segment.
+    // Values may contain `=` — base64 padding, URL query strings, JWTs.
+    // They must round-trip unchanged.
     writeFileSync(envPath, "");
     await exec("bash", [script, "TOKEN=abc=def==", "URL=http://x.y/?a=1&b=2"]);
     expect(read(envPath)).toBe("TOKEN=abc=def==\nURL=http://x.y/?a=1&b=2\n");

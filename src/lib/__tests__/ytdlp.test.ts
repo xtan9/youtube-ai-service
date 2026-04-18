@@ -43,20 +43,23 @@ describe("buildYtdlpArgs", () => {
     // Missing this arg means yt-dlp falls back to no-PO-Token mode, which
     // YouTube rejects for player responses regardless of IP or cookies.
     const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
-    const potArgValues = args
+    const extractorArgValues = args
       .map((a, i) => (a === "--extractor-args" ? args[i + 1] : null))
       .filter((v): v is string => v !== null);
 
-    // Two pairs: youtube:player_client=... and youtubepot-bgutilhttp:...
-    // If someone deletes the player_client line, the player_client cascade
-    // disappears and videos fail silently. Pin the count to catch that.
-    expect(potArgValues).toHaveLength(2);
+    // Both levers must be present. Check them independently — pinning the
+    // exact count would break legitimately when a future plugin adds its
+    // own --extractor-args, but losing either of these two specific pairs
+    // silently breaks extraction.
+    expect(
+      extractorArgValues.some((v) => v.startsWith("youtube:player_client="))
+    ).toBe(true);
 
     // Exact equality against the exported constant so a URL typo, scheme
     // change, or hostname drift (e.g. switching to service DNS, which
     // wouldn't resolve in the shared namespace) fails the test instead of
     // passing a regex that only checks shape.
-    expect(potArgValues).toContain(
+    expect(extractorArgValues).toContain(
       `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`
     );
   });

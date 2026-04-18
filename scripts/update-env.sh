@@ -21,9 +21,14 @@ LOCK_FILE="${ENV_FILE}.lock"
 
 # flock guards against two overlapping deploys (workflow_dispatch racing a
 # workflow_run, or a human running this during a pipeline deploy) from
-# interleaving read/write and corrupting the file.
+# interleaving read/write and corrupting the file. `--timeout=30` ensures a
+# stuck lockholder (killed mid-run without releasing) doesn't wedge every
+# subsequent deploy silently — we'd rather fail loudly after 30s.
 exec {LOCK_FD}>"$LOCK_FILE"
-flock --exclusive "$LOCK_FD"
+if ! flock --exclusive --timeout=30 "$LOCK_FD"; then
+  echo "update-env.sh: could not acquire $LOCK_FILE within 30s (held by another deploy?)" >&2
+  exit 1
+fi
 
 touch "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -43,8 +48,11 @@ for pair in "$@"; do
   # Skip empty values — the secret simply isn't being rotated this run.
   # Tailscale state is persisted in the docker volume; the authkey is only
   # consulted on first container start, so an unset GitHub secret on a
-  # subsequent deploy should leave the existing .env line alone.
+  # subsequent deploy should leave the existing .env line alone. Log the
+  # skip so the operator can distinguish "secret not rotated" from "secret
+  # deliberately cleared" when auditing a deploy log.
   if [[ -z "$value" ]]; then
+    echo "update-env.sh: skipping $key (empty value)" >&2
     continue
   fi
 
@@ -53,13 +61,10 @@ for pair in "$@"; do
   # hosts, turning `mv` into copy+unlink, which can leave a truncated
   # .env on crash.
   tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
-  # Keep group/world off the temp file from the start; `mv` preserves mode.
   chmod 600 "$tmp"
 
-  # Case-pattern passthrough avoids awk's FS=OFS="=" handling of `=` in
-  # values, which was a hazard with base64-padded secrets. POSIX sh
-  # globbing on `"${key}="*` is a prefix match — anchored because the
-  # pattern starts at the beginning of `$line`.
+  # Case-pattern prefix match (anchored at start of line) handles `=` in
+  # values correctly (base64 padding, URL query strings).
   found=0
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in

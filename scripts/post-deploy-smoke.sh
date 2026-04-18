@@ -12,10 +12,14 @@ set -euo pipefail
 
 echo "[smoke] egress IP: verifying yt-dlp traffic routes through the home exit node"
 # If Tailscale lost its route (authkey expired, exit node offline), yt-dlp
-# would silently fall back to direct egress — exactly the bug this stack
-# exists to prevent. Fail loudly.
+# would silently fall back to direct egress from the VPS IP, which YouTube
+# flags as a datacenter and returns "Sign in to confirm you're not a bot"
+# (HTTP 403/429 on player responses). Fail loudly here so a degraded stack
+# doesn't ship.
 vps_ip="$(curl -sS --max-time 10 https://api.ipify.org || echo unknown)"
-container_ip="$(docker exec youtube-ai-service curl -sS --max-time 10 https://api.ipify.org 2>/dev/null || echo unknown)"
+# Don't suppress docker exec stderr — if the container is missing or
+# dockerd is unreachable, the operator needs that signal, not "unknown".
+container_ip="$(docker exec youtube-ai-service curl -sS --max-time 10 https://api.ipify.org || echo unknown)"
 if [[ "$vps_ip" == "unknown" || "$container_ip" == "unknown" ]]; then
   echo "[smoke] egress-IP check inconclusive (vps=$vps_ip container=$container_ip); failing closed"
   exit 1
@@ -41,7 +45,9 @@ echo "[smoke] yt-dlp: end-to-end extraction of a known-captioned public video"
 # cascade, PO Token fetch, signature decoding — without actually downloading
 # media. Catches PO Token plugin regressions, exit-node auth failures, and
 # YouTube-side schema drift at deploy time rather than at first-user-request.
-# Video ID is a stable long-lived public video (Google I/O announcement).
+# dQw4w9WgXcQ is "Never Gonna Give You Up" — chosen because it has been
+# public, captioned, and monetized for 15+ years, so it will not be
+# age-gated, private, or region-restricted in any plausible future.
 smoke_video="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 if ! docker exec youtube-ai-service yt-dlp --dump-json --skip-download \
     --extractor-args "youtube:player_client=web_safari,mweb,android_vr" \

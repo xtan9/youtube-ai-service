@@ -24,10 +24,9 @@ docker compose build
 echo "Restarting stack (youtube-ai-service + tailscale-exit + pot-provider)..."
 docker compose up -d
 
-# Poll `youtube-ai-service` health until it resolves one way or the other.
-# Replaces the old `sleep 10 && snapshot` pattern which mis-classified a
-# still-starting container (start_period=20s) as a failed deploy and
-# opened a spurious GitHub issue on every slow boot.
+# Poll until health resolves one way or the other. Snapshotting after a
+# fixed sleep would misclassify a still-starting container (start_period
+# is 20s on the app, 45s on tailscale-exit) as a failed deploy.
 echo "Waiting for youtube-ai-service to become healthy..."
 deadline=$(( SECONDS + 180 ))
 while (( SECONDS < deadline )); do

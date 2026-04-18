@@ -8,14 +8,18 @@ services:
   #
   # `TS_USERSPACE=false` + `NET_ADMIN` + `NET_RAW` + `/dev/net/tun` put the
   # client in kernel-networking mode. Userspace mode would drop the caps
-  # requirement but adds ~30% latency to every egressed request and
-  # occasionally drops long-running connections — not worth it for this use.
+  # requirement but adds meaningful latency per request and occasionally
+  # drops long-running connections — not worth it for this use.
   tailscale-exit:
     image: tailscale/tailscale:v1.96.5
     container_name: yt-ai-tailscale-exit
     hostname: youtube-ai-vps-egress
     environment:
       - TS_AUTHKEY=${TS_AUTHKEY}
+      # TS_EXIT_NODE_HOSTNAME is duplicated here (not just interpolated into
+      # TS_EXTRA_ARGS) so the container env can expose it to the healthcheck
+      # script, which needs to `tailscale ping` the exit node by name.
+      - TS_EXIT_NODE_HOSTNAME=${TS_EXIT_NODE_HOSTNAME}
       - TS_EXTRA_ARGS=--exit-node=${TS_EXIT_NODE_HOSTNAME} --exit-node-allow-lan-access=true --ssh=false
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=false
@@ -33,14 +37,21 @@ services:
     ports:
       - "${PORT:-3001}:3001"
     healthcheck:
-      # `tailscale status` exits non-zero until the backend is Running AND
-      # the exit node is reachable. Until this healthcheck passes, dependent
-      # services are held back — preventing the race where yt-dlp starts
-      # issuing requests before tailscaled has established the exit-node
-      # route (fall-through would egress from the VPS IP = original bug).
-      test: ["CMD-SHELL", "tailscale status --peers=false >/dev/null 2>&1"]
+      # Two-stage check: tailscaled must be authenticated AND the exit node
+      # must respond to a WireGuard ping. `tailscale status` alone returns
+      # 0 as soon as the local backend is Running — it does NOT verify the
+      # exit-node peer is online, which means services gated on its exit
+      # would start up with traffic falling through to the VPS IP (the
+      # datacenter-bot-wall condition this whole stack exists to prevent).
+      # `tailscale ping` sends a real WireGuard packet via DERP/direct; it
+      # returns non-zero if the peer is offline or the route is broken.
+      test:
+        - CMD-SHELL
+        - >-
+          tailscale status --peers=false >/dev/null 2>&1
+          && tailscale ping --timeout=5s --c=1 "$$TS_EXIT_NODE_HOSTNAME" >/dev/null 2>&1
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 6
       start_period: 45s
     restart: unless-stopped
