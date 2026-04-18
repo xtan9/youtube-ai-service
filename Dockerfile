@@ -24,15 +24,23 @@ ARG BGUTIL_POT_VERSION=1.3.1
 # (`faster-whisper` the pip package ships no binary — just the Python
 # library — which is why a naive `pip install faster-whisper` leaves a
 # latent ENOENT at transcribe time). whisper-ctranslate2 depends on
-# faster-whisper so the underlying runtime is identical.
+# faster-whisper so the underlying runtime is identical. Version pinned
+# so the default output-filename convention (`<stem>.txt`) — which
+# `whisper.ts` reads by constructing the same path — can't shift under us
+# on a rebuild and re-break transcription after a successful image build.
+ARG WHISPER_CT2_VERSION=0.5.7
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv ffmpeg curl unzip ca-certificates \
     && python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir \
-        whisper-ctranslate2 \
+        "whisper-ctranslate2==${WHISPER_CT2_VERSION}" \
         yt-dlp \
         "bgutil-ytdlp-pot-provider==${BGUTIL_POT_VERSION}" \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    # Smoke-test the binary at build time so a future Dockerfile edit that
+    # breaks the venv PATH or mangles the pip install fails the build
+    # instead of shipping an image that ENOENTs at first user request.
+    && /opt/venv/bin/whisper-ctranslate2 --version >/dev/null
 
 # `bgutil-ytdlp-pot-provider` is a yt-dlp plugin that fetches Proof-of-Origin
 # tokens from the `pot-provider` sidecar container (see docker-compose.yml).

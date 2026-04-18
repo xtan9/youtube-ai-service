@@ -54,8 +54,13 @@ export async function transcribeAudio(audioPath: string): Promise<string> {
 
         try {
           const transcript = await readFile(txtPath, "utf-8");
-          // Clean up the output file
-          await unlink(txtPath).catch(() => {});
+          await unlink(txtPath).catch((unlinkErr) => {
+            // Cleanup failure is non-fatal — the transcript is in-memory —
+            // but a repeated EACCES/EBUSY is a leak signal worth surfacing.
+            console.warn(
+              `[whisper] failed to unlink ${txtPath}: ${unlinkErr}`
+            );
+          });
           resolve(transcript.trim());
         } catch (readErr) {
           reject(new Error(`Failed to read transcript file: ${readErr}`));
