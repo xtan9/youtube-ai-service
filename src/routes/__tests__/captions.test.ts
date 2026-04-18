@@ -2,10 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { captions } from "../captions.js";
 import * as captionsLib from "../../lib/captions.js";
 
-function post(body: unknown) {
-  return captions.request("/captions", {
+// All route tests run with a valid VPS_API_KEY in env — the auth path is
+// also exercised via a dedicated block below.
+const VALID_KEY = "test-key";
+
+function post(body: unknown, path = "/captions") {
+  return captions.request(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${VALID_KEY}`,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -13,6 +20,7 @@ function post(body: unknown) {
 describe("POST /captions", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    process.env.VPS_API_KEY = VALID_KEY;
   });
 
   it("rejects malformed bodies with 400", async () => {
@@ -25,10 +33,26 @@ describe("POST /captions", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects malformed JSON with 400 (not 500)", async () => {
+    // Hono's default behavior is to throw on c.req.json() failure, which
+    // becomes a 500. The endpoint overrides that so a malformed request
+    // body is classified as client error rather than service error.
+    const res = await captions.request("/captions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${VALID_KEY}`,
+      },
+      body: "{not valid json",
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("returns 404 with a stable error code when no captions are available", async () => {
-    // The frontend's fallback logic depends on a distinct 404 status so it
-    // can route to /transcribe without surfacing an error to the user.
-    // A flakier 500 here would double-up alerts and mask real failures.
+    // The frontend's fallback routing depends on 404 being distinct from
+    // 500 — on 404 it proceeds to /transcribe silently; on 500 it
+    // surfaces an error. If these ever get merged, expect either
+    // unnecessary alert storms or silently-swallowed bugs.
     vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(null);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -53,15 +77,70 @@ describe("POST /captions", () => {
     expect(await res.json()).toEqual(mockResult);
   });
 
-  it("returns 500 (not 404) when the library throws unexpectedly", async () => {
-    // The route differentiates these because 500 triggers alerts upstream
-    // while 404 is the normal "no captions" fallback path.
+  it("returns 500 with a generic message when fetchCaptions throws", async () => {
+    // Captions lib throws only on unexpected errors (library schema
+    // drift, network, parse failure). We return a generic string to the
+    // client so raw internals aren't echoed into the browser; the real
+    // error stays in logs.
+    vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(captionsLib, "fetchCaptions").mockRejectedValue(
-      new Error("network-fubar")
+      new Error("internal-library-stack-trace-would-leak-here")
     );
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toEqual({ error: "Internal error" });
+    expect(body.error).not.toContain("internal-library-stack-trace");
+  });
+
+  it("handles synchronous throws from fetchCaptions (await coerces to rejection)", async () => {
+    // Defense against a future refactor that drops `async` from
+    // fetchCaptions — the route still awaits it so a sync throw still
+    // routes through the catch.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(captionsLib, "fetchCaptions").mockImplementation(() => {
+      throw new Error("sync-throw");
+    });
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(res.status).toBe(500);
+  });
+});
+
+describe("POST /captions — auth enforcement", () => {
+  // Auth middleware is attached inside the sub-router, not at the app
+  // level. Verify it actually fires on THIS path so a future refactor
+  // that moves middleware can't silently expose the endpoint.
+  beforeEach(() => {
+    process.env.VPS_API_KEY = VALID_KEY;
+    vi.restoreAllMocks();
+  });
+
+  it("returns 401 without an Authorization header", async () => {
+    const res = await captions.request("/captions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      }),
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 403 on a wrong bearer token", async () => {
+    const res = await captions.request("/captions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer wrong-key",
+      },
+      body: JSON.stringify({
+        youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      }),
+    });
+    expect(res.status).toBe(403);
   });
 });

@@ -9,12 +9,11 @@ import {
   type TranscriptSegment,
 } from "youtube-transcript-plus";
 
-// The Vercel side previously called this library directly — but Vercel's
-// serverless egresses from AWS datacenter IPs, which YouTube strips
-// caption-track URLs for. Running it from this service (which has
-// residential egress via the Tailscale exit node) actually gets captions.
-// This endpoint is the caption-fetch half of what used to live in the
-// frontend's caption-extractor.ts.
+// Caption fetching must run from an IP YouTube classifies as residential —
+// datacenter IPs get caption-track URLs stripped from the watch-page
+// response, making every caption fetch look like "no transcripts available".
+// This service egresses through the Tailscale exit node (home Mac) which
+// gives youtube-transcript-plus the residential presence it needs.
 
 export type PromptLocale = "en" | "zh";
 
@@ -22,12 +21,17 @@ export interface CaptionResult {
   readonly transcript: string;
   readonly source: "auto_captions";
   readonly language: PromptLocale;
-  readonly title: string;
-  readonly channelName: string;
+  // `null` not `""`: the distinction between "YouTube returned empty" and
+  // "we never got videoDetails" matters to the frontend UI, and forcing
+  // callers to handle the unknown case at the type level prevents the
+  // silent-empty-string bug class.
+  readonly title: string | null;
+  readonly channelName: string | null;
 }
 
-// youtu.be shortlinks + watch?v= + shorts URLs — whatever yt-dlp accepts,
-// we accept. Kept simple: extract the 11-char video ID.
+// 11-char YouTube video IDs. Covers watch, youtu.be shortlink, Shorts,
+// and embed forms. Hostless so m.youtube.com / music.youtube.com flow
+// through the same patterns.
 const VIDEO_ID_PATTERNS: readonly RegExp[] = [
   /youtu\.be\/([a-zA-Z0-9_-]{11})/,
   /[?&]v=([a-zA-Z0-9_-]{11})/,
@@ -43,9 +47,11 @@ export function extractVideoId(url: string): string | null {
   return null;
 }
 
-// Errors that mean "no usable captions" — distinct from "caption library
-// blew up unexpectedly". Callers upstream rely on this distinction to
-// decide whether to fall back to Whisper (expected) or alert (unexpected).
+// Errors the library raises for "this video genuinely has no captions" —
+// expected outcomes that callers handle with a Whisper fallback. Anything
+// else (TypeError from schema drift, fetch abort, parse failure) is an
+// operational problem that should surface, not silently degrade to paid
+// transcription on every request.
 const EXPECTED_NO_CAPTIONS_ERRORS = [
   YoutubeTranscriptDisabledError,
   YoutubeTranscriptNotAvailableError,
@@ -59,12 +65,34 @@ export function isExpectedNoCaptions(err: unknown): boolean {
 }
 
 // zh-CN and zh-TW both map to "zh" — the downstream prompt templates use
-// a single "zh" locale. Everything else falls through to "en".
-function pickLocale(segments: readonly TranscriptSegment[]): PromptLocale {
+// a single "zh" locale. Unknown locales default to "en" because that's
+// the only prompt template guaranteed to exist; the warning is so we can
+// audit miss rate and decide whether to add ja/ko/etc.
+export function pickLocale(
+  segments: readonly TranscriptSegment[],
+  videoId?: string
+): PromptLocale {
   const lang = segments[0]?.lang ?? "";
-  return lang.toLowerCase().startsWith("zh") ? "zh" : "en";
+  const normalized = lang.toLowerCase();
+  if (normalized.startsWith("zh")) return "zh";
+  if (!normalized.startsWith("en") && normalized !== "") {
+    console.warn("[captions] unknown locale falling back to en", {
+      videoId,
+      lang,
+    });
+  }
+  return "en";
 }
 
+/**
+ * Fetch auto-captions for a YouTube URL.
+ *
+ * Returns `null` for the expected "no captions available" outcome (the
+ * frontend falls back to Whisper transcription). Throws on unexpected
+ * library or network failures so the route can return 5xx — a blanket
+ * `null` here would trigger a silent Whisper fallback on every bug,
+ * hiding real problems behind compute bills.
+ */
 export async function fetchCaptions(
   youtubeUrl: string
 ): Promise<CaptionResult | null> {
@@ -76,17 +104,14 @@ export async function fetchCaptions(
     const response = await fetchTranscript(videoId, { videoDetails: true });
     result = response as TranscriptResult;
   } catch (err) {
-    if (!isExpectedNoCaptions(err)) {
-      // Alertable: unexpected failures silently fall back to Whisper
-      // transcription, which costs compute + Mac-tunnel bandwidth.
-      console.error("[captions] CAPTION_UNEXPECTED_FAILURE", {
-        errorId: "CAPTION_UNEXPECTED_FAILURE",
-        videoId,
-        errorClass: err instanceof Error ? err.constructor.name : typeof err,
-        err,
-      });
-    }
-    return null;
+    if (isExpectedNoCaptions(err)) return null;
+    console.error("[captions] CAPTION_UNEXPECTED_FAILURE", {
+      errorId: "CAPTION_UNEXPECTED_FAILURE",
+      videoId,
+      errorClass: err instanceof Error ? err.constructor.name : typeof err,
+      err,
+    });
+    throw err;
   }
 
   const { segments, videoDetails } = result;
@@ -103,8 +128,8 @@ export async function fetchCaptions(
   return {
     transcript,
     source: "auto_captions",
-    language: pickLocale(segments),
-    title: videoDetails?.title ?? "",
-    channelName: videoDetails?.author ?? "",
+    language: pickLocale(segments, videoId),
+    title: videoDetails?.title ?? null,
+    channelName: videoDetails?.author ?? null,
   };
 }

@@ -2,8 +2,14 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { downloadAudio, cleanupAudio } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/whisper.js";
+import { authMiddleware } from "../middleware/auth.js";
 
 const transcribe = new Hono();
+
+// Attach auth inside the sub-router so every path served here is
+// protected by default — path-prefix registration at the app level
+// misses future sub-routes (e.g. /transcribe/progress).
+transcribe.use("*", authMiddleware);
 
 const requestSchema = z.object({
   youtube_url: z.string().url(),
