@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { fetchCaptions, extractVideoId } from "../lib/captions.js";
-import { youtubeUrlSchema } from "../lib/youtube-url.js";
+import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 
 const captions = new Hono();
@@ -16,6 +16,12 @@ captions.use("*", authMiddleware);
 
 const requestSchema = z.object({
   youtube_url: youtubeUrlSchema,
+  // Optional ISO 639-1 or BCP-47 code. Passed through to
+  // `youtube-transcript-plus` so the library selects a specific caption
+  // track instead of the arbitrarily-ordered `tracks[0]`. Regex-constrained
+  // at the schema boundary so values like `--help` or `"; rm -rf /"` are
+  // rejected here instead of producing confusing downstream CLI errors.
+  lang: languageCodeSchema.optional(),
 });
 
 captions.post("/", async (c) => {
@@ -37,7 +43,7 @@ captions.post("/", async (c) => {
     );
   }
 
-  const { youtube_url } = parsed.data;
+  const { youtube_url, lang } = parsed.data;
 
   // Log only the videoId, never the full URL. YouTube URLs are unlikely
   // to contain secrets in practice, but the zod schema above only
@@ -46,8 +52,8 @@ captions.post("/", async (c) => {
   const videoId = extractVideoId(youtube_url) ?? "unknown";
 
   try {
-    console.log(`Fetching captions for video ${videoId}`);
-    const result = await fetchCaptions(youtube_url);
+    console.log(`Fetching captions for video ${videoId}${lang ? ` (lang=${lang})` : ""}`);
+    const result = await fetchCaptions(youtube_url, lang);
 
     // Status contract this route owes its consumers:
     //   200 — captions extracted, fallback path not needed

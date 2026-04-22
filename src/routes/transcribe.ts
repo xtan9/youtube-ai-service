@@ -3,7 +3,7 @@ import { z } from "zod";
 import { downloadAudio, cleanupAudio } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import { extractVideoId } from "../lib/captions.js";
-import { youtubeUrlSchema } from "../lib/youtube-url.js";
+import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 
 const transcribe = new Hono();
@@ -16,6 +16,12 @@ transcribe.use("*", authMiddleware);
 
 const requestSchema = z.object({
   youtube_url: youtubeUrlSchema,
+  // Optional ISO 639-1 code. When present, forwarded to whisper as
+  // `--language <code>` so the model transcribes into the named language
+  // instead of auto-detecting (which misfires on short/noisy clips).
+  // Regex-constrained at the schema boundary so values like `--model` or
+  // `"; rm -rf /"` are rejected here instead of polluting whisper's argv.
+  lang: languageCodeSchema.optional(),
 });
 
 transcribe.post("/", async (c) => {
@@ -37,22 +43,27 @@ transcribe.post("/", async (c) => {
     );
   }
 
-  const { youtube_url } = parsed.data;
+  const { youtube_url, lang } = parsed.data;
   const videoId = extractVideoId(youtube_url) ?? "unknown";
   let audioPath: string | null = null;
 
   try {
-    console.log(`Transcribing video ${videoId}`);
+    console.log(
+      `Transcribing video ${videoId}${lang ? ` (lang=${lang})` : ""}`
+    );
 
     audioPath = await downloadAudio(youtube_url);
     console.log(`Audio downloaded to: ${audioPath}`);
 
-    const transcript = await transcribeAudio(audioPath);
+    const transcript = await transcribeAudio(audioPath, lang);
     console.log(`Transcription complete: ${transcript.length} characters`);
 
     return c.json({
       transcript,
-      language: "auto",
+      // Echo back what we pinned so callers know which language we
+      // instructed whisper to produce. "auto" preserves the prior contract
+      // when no hint was provided.
+      language: lang ?? "auto",
       source: "whisper" as const,
     });
   } catch (err) {

@@ -256,4 +256,25 @@ describe("fetchCaptions", () => {
       channelName: "a",
     });
   });
+
+  it("omits `lang` in the library call when the caller didn't provide one (back-compat)", async () => {
+    // Without this guard a future refactor could pass `{ lang: undefined }`,
+    // which the library treats as a real filter and rejects with
+    // NotAvailableLanguage — breaking the current "first track wins" flow
+    // that existing callers depend on.
+    mockedFetchTranscript.mockResolvedValue(ok([{ text: "hi", lang: "en" }]));
+    await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    const call = mockedFetchTranscript.mock.calls[0];
+    expect(call[1]).toEqual({ videoDetails: true });
+    expect(call[1]).not.toHaveProperty("lang");
+  });
+
+  it("forwards `lang` to the library when provided (pins caption track)", async () => {
+    // The whole point of this parameter: without it, the library picks
+    // `tracks[0]` which for some videos is the wrong language entirely.
+    mockedFetchTranscript.mockResolvedValue(ok([{ text: "bonjour", lang: "fr" }]));
+    await fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "fr");
+    const call = mockedFetchTranscript.mock.calls[0];
+    expect(call[1]).toEqual({ videoDetails: true, lang: "fr" });
+  });
 });

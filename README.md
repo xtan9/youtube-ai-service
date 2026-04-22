@@ -4,15 +4,16 @@ Lightweight transcription microservice. Part of the YouTube AI Chat stack.
 
 ## Endpoints
 
-- `POST /captions` — Fetch YouTube auto-captions for a video. Returns 200 with `{ transcript, source, language, title, channelName }` or 404 `{ error: "no_captions" }` if the video has none. Much cheaper than transcription — call this first.
-- `POST /transcribe` — Download audio via yt-dlp and transcribe with whisper-ctranslate2. Fallback when captions aren't available.
+- `POST /metadata` — Extract video metadata (title, description, detected language, available caption track codes) via `yt-dlp --dump-json`. Call this first so the orchestrator can pin caption + whisper language and avoid the default "pick tracks[0]" bug that produced wrong-language transcripts.
+- `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional `lang` (ISO 639-1 or BCP-47) that forwards to `youtube-transcript-plus` so a specific caption track is selected. Returns 200 with `{ transcript, source, language, title, channelName }` or 404 `{ error: "no_captions" }` if the track isn't available. Much cheaper than transcription — call this before `/transcribe`.
+- `POST /transcribe` — Download audio via yt-dlp and transcribe with whisper-ctranslate2. Accepts an optional `lang` that forwards to whisper as `--language <code>` to bypass auto-detect. Fallback when captions aren't available.
 - `GET /health` — Health check (unauthenticated).
 
-Both data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
+All data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
 
 ## Tech
 
-Node.js 22, Hono, Python (faster-whisper), yt-dlp, ffmpeg. Runs in Docker.
+Node.js 22, Hono, Python (faster-whisper), yt-dlp, ffmpeg, `franc` for text-based language detection. Runs in Docker.
 
 ## Architecture
 

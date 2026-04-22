@@ -36,4 +36,27 @@ describe("buildWhisperArgs", () => {
     expect(flagPairs["--output_format"]).toBe("txt");
     expect(flagPairs["--beam_size"]).toBe("1");
   });
+
+  it("omits --language when no lang provided (preserves whisper auto-detect default)", () => {
+    // Back-compat: callers that don't pass lang must see exactly the same
+    // argv as before, so whisper's built-in language detection continues
+    // to run. A stray --language flag would silently override that.
+    const args = buildWhisperArgs("/tmp/audio.mp3");
+    expect(args).not.toContain("--language");
+  });
+
+  it("emits --language <code> when a lang is provided", () => {
+    // whisper-ctranslate2 accepts ISO 639-1 codes directly. The flag form
+    // is `--language fr` (space-separated, not `=fr`).
+    const args = buildWhisperArgs("/tmp/audio.mp3", "fr");
+    const langIdx = args.indexOf("--language");
+    expect(langIdx).toBeGreaterThan(-1);
+    expect(args[langIdx + 1]).toBe("fr");
+  });
+
+  it("emits --language for zh path (ensures CJK languages survive normalization)", () => {
+    const args = buildWhisperArgs("/tmp/audio.mp3", "zh");
+    const langIdx = args.indexOf("--language");
+    expect(args[langIdx + 1]).toBe("zh");
+  });
 });
