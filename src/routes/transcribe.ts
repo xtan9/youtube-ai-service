@@ -3,7 +3,7 @@ import { z } from "zod";
 import { downloadAudio, cleanupAudio } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import { extractVideoId } from "../lib/captions.js";
-import { youtubeUrlSchema } from "../lib/youtube-url.js";
+import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 
 const transcribe = new Hono();
@@ -19,7 +19,9 @@ const requestSchema = z.object({
   // Optional ISO 639-1 code. When present, forwarded to whisper as
   // `--language <code>` so the model transcribes into the named language
   // instead of auto-detecting (which misfires on short/noisy clips).
-  lang: z.string().min(2).max(16).optional(),
+  // Regex-constrained at the schema boundary so values like `--model` or
+  // `"; rm -rf /"` are rejected here instead of polluting whisper's argv.
+  lang: languageCodeSchema.optional(),
 });
 
 transcribe.post("/", async (c) => {

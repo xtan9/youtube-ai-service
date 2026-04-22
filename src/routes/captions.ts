@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { fetchCaptions, extractVideoId } from "../lib/captions.js";
-import { youtubeUrlSchema } from "../lib/youtube-url.js";
+import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 
 const captions = new Hono();
@@ -18,9 +18,10 @@ const requestSchema = z.object({
   youtube_url: youtubeUrlSchema,
   // Optional ISO 639-1 or BCP-47 code. Passed through to
   // `youtube-transcript-plus` so the library selects a specific caption
-  // track instead of the arbitrarily-ordered `tracks[0]`. Length cap is
-  // generous for BCP-47 (`zh-Hans`, `zh-Hant-TW`).
-  lang: z.string().min(2).max(16).optional(),
+  // track instead of the arbitrarily-ordered `tracks[0]`. Regex-constrained
+  // at the schema boundary so values like `--help` or `"; rm -rf /"` are
+  // rejected here instead of producing confusing downstream CLI errors.
+  lang: languageCodeSchema.optional(),
 });
 
 captions.post("/", async (c) => {

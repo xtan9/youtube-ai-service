@@ -34,6 +34,23 @@ describe("POST /transcribe", () => {
     expect(res.status).toBe(400);
   });
 
+  it.each([
+    ["--language", "CLI-flag shape"],
+    ["; rm -rf /", "shell metachar shape"],
+    [" en", "leading whitespace"],
+    ["a", "too short"],
+    ["", "empty string"],
+  ])("rejects lang=%s (%s) with 400", async (lang) => {
+    // Schema-boundary rejection keeps garbage out of whisper's argv so
+    // a lang like "--model" can't produce a confusing 500 error deep
+    // in the CLI layer.
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      lang,
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("returns 200 with language='auto' when no lang provided (back-compat)", async () => {
     // Pre-PR clients send `{youtube_url}` only and expect `language: "auto"`
     // in the response. Preserve that exact shape.

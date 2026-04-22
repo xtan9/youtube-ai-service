@@ -134,6 +134,42 @@ describe("POST /captions", () => {
     // filter was applied.
     expect(spy).toHaveBeenCalledWith(expect.any(String), undefined);
   });
+
+  it.each([
+    ["--model", "CLI-flag shape"],
+    ["; rm -rf /", "shell-metachar shape"],
+    ["en_US", "underscore instead of dash"],
+    ["a", "too short"],
+    ["", "empty string"],
+    [" en", "leading whitespace"],
+  ])("rejects lang=%s (%s) with 400", async (lang) => {
+    // Argv-based execFile blocks shell injection, but a lang like "--model"
+    // would reach whisper and produce confusing CLI errors that surface
+    // as 500 in logs. Reject at the schema boundary so the failure is
+    // classified as "bad client input" instead of "service broken".
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      lang,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it.each([
+    ["en"],
+    ["fr"],
+    ["zh"],
+    ["eng"], // 3-letter ISO 639-3
+    ["en-US"],
+    ["zh-Hans"],
+    ["zh-Hant-TW"],
+  ])("accepts well-formed BCP-47 / ISO 639 tag: %s", async (lang) => {
+    vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(null);
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      lang,
+    });
+    expect(res.status).toBe(404); // no_captions, but schema passed
+  });
 });
 
 describe("POST /captions — auth enforcement", () => {
