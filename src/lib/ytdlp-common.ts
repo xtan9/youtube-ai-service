@@ -1,0 +1,40 @@
+// Flags and constants shared between yt-dlp invocations (audio download,
+// metadata dump). Extracted so `buildYtdlpArgs` and `buildYtdlpMetadataArgs`
+// can't drift out of sync — a player_client or PO Token change made in one
+// call path must apply to the other.
+
+// Datacenter IPs frequently hit YouTube's "Sign in to confirm you're not a
+// bot" wall when yt-dlp uses the default `web` player client. Cycling
+// through alternate clients (mweb / web_safari / android_vr) unblocks most
+// requests when combined with a residential-IP egress path (Tailscale exit
+// node → home device, wired in docker-compose.yml).
+export const YOUTUBE_PLAYER_CLIENTS = "web_safari,mweb,android_vr";
+
+// Pair the client list with a browser UA so the request profile matches.
+export const SAFARI_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+
+// Proof-of-Origin Token provider. `pot-provider` is the sibling container
+// (see docker-compose.yml) that shares our network namespace, so it's
+// reachable on localhost. YouTube enforces PO Tokens across multiple
+// extraction paths — without this, requests fail regardless of IP
+// reputation or cookie state. Override via env for local dev or if the
+// sidecar's bind address changes.
+export const POT_PROVIDER_URL =
+  process.env.POT_PROVIDER_URL ?? "http://127.0.0.1:4416";
+
+/**
+ * Common flags every yt-dlp invocation shares: playlist guard, YouTube
+ * extractor tweaks (player_client + PO Token), and the matched User-Agent.
+ */
+export function buildYtdlpCommonArgs(): string[] {
+  return [
+    "--no-playlist",
+    "--extractor-args",
+    `youtube:player_client=${YOUTUBE_PLAYER_CLIENTS}`,
+    "--extractor-args",
+    `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`,
+    "--user-agent",
+    SAFARI_USER_AGENT,
+  ];
+}

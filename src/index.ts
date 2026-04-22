@@ -6,6 +6,7 @@ import { logger } from "hono/logger";
 import { health } from "./routes/health.js";
 import { transcribe } from "./routes/transcribe.js";
 import { captions } from "./routes/captions.js";
+import { metadata } from "./routes/metadata.js";
 
 const app = new Hono();
 
@@ -21,6 +22,7 @@ app.route("/", health);
 // path. Mounting at `/` would make auth fire on /health too.
 app.route("/transcribe", transcribe);
 app.route("/captions", captions);
+app.route("/metadata", metadata);
 
 const port = parseInt(process.env.PORT || "3001", 10);
 

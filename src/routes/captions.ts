@@ -16,6 +16,11 @@ captions.use("*", authMiddleware);
 
 const requestSchema = z.object({
   youtube_url: youtubeUrlSchema,
+  // Optional ISO 639-1 or BCP-47 code. Passed through to
+  // `youtube-transcript-plus` so the library selects a specific caption
+  // track instead of the arbitrarily-ordered `tracks[0]`. Length cap is
+  // generous for BCP-47 (`zh-Hans`, `zh-Hant-TW`).
+  lang: z.string().min(2).max(16).optional(),
 });
 
 captions.post("/", async (c) => {
@@ -37,7 +42,7 @@ captions.post("/", async (c) => {
     );
   }
 
-  const { youtube_url } = parsed.data;
+  const { youtube_url, lang } = parsed.data;
 
   // Log only the videoId, never the full URL. YouTube URLs are unlikely
   // to contain secrets in practice, but the zod schema above only
@@ -46,8 +51,8 @@ captions.post("/", async (c) => {
   const videoId = extractVideoId(youtube_url) ?? "unknown";
 
   try {
-    console.log(`Fetching captions for video ${videoId}`);
-    const result = await fetchCaptions(youtube_url);
+    console.log(`Fetching captions for video ${videoId}${lang ? ` (lang=${lang})` : ""}`);
+    const result = await fetchCaptions(youtube_url, lang);
 
     // Status contract this route owes its consumers:
     //   200 — captions extracted, fallback path not needed

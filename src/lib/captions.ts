@@ -87,6 +87,10 @@ export function pickLocale(
 /**
  * Fetch auto-captions for a YouTube URL.
  *
+ * When `lang` is provided, forwards it to the library so the specific
+ * caption track is selected instead of `tracks[0]` (which YouTube can
+ * order arbitrarily — the bug that produced Arabic for French videos).
+ *
  * Returns `null` for the expected "no captions available" outcome (the
  * frontend falls back to Whisper transcription). Throws on unexpected
  * library or network failures so the route can return 5xx — a blanket
@@ -94,14 +98,18 @@ export function pickLocale(
  * hiding real problems behind compute bills.
  */
 export async function fetchCaptions(
-  youtubeUrl: string
+  youtubeUrl: string,
+  lang?: string
 ): Promise<CaptionResult | null> {
   const videoId = extractVideoId(youtubeUrl);
   if (!videoId) return null;
 
   let result: TranscriptResult;
   try {
-    const response = await fetchTranscript(videoId, { videoDetails: true });
+    const response = await fetchTranscript(videoId, {
+      videoDetails: true,
+      ...(lang ? { lang } : {}),
+    });
     result = response as TranscriptResult;
   } catch (err) {
     if (isExpectedNoCaptions(err)) return null;

@@ -108,6 +108,32 @@ describe("POST /captions", () => {
     });
     expect(res.status).toBe(500);
   });
+
+  it("forwards `lang` to fetchCaptions when provided", async () => {
+    // Validates the critical handoff: without this, lang is accepted by
+    // the zod schema but silently dropped before reaching the library,
+    // leaving the `tracks[0]` bug unfixed.
+    const spy = vi
+      .spyOn(captionsLib, "fetchCaptions")
+      .mockResolvedValue(null);
+    await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      lang: "fr",
+    });
+    expect(spy).toHaveBeenCalledWith(expect.any(String), "fr");
+  });
+
+  it("omits `lang` when the caller didn't send one (back-compat)", async () => {
+    const spy = vi
+      .spyOn(captionsLib, "fetchCaptions")
+      .mockResolvedValue(null);
+    await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    // Second arg is undefined — preserves pre-PR behavior where no lang
+    // filter was applied.
+    expect(spy).toHaveBeenCalledWith(expect.any(String), undefined);
+  });
 });
 
 describe("POST /captions — auth enforcement", () => {
