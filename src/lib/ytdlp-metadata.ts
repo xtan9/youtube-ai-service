@@ -69,10 +69,25 @@ function normalizeYtdlpJson(raw: unknown): YtdlpMetadata {
   // a minor version bump could rename fields. Missing fields collapse to
   // safe defaults; type-unexpected values (e.g. `language: 42`) also
   // collapse, keeping the caller's contract simple.
-  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<
-    string,
-    unknown
-  >;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("yt-dlp metadata returned a non-object payload");
+  }
+  const obj = raw as Record<string, unknown>;
+
+  // Every real yt-dlp video-info payload carries at least one of these
+  // anchor fields. `{}` (schema regression, partial response, wrong
+  // endpoint) would otherwise collapse to all-defaults and flow through
+  // as a silent success — the route would return 200 with garbage and
+  // the orchestrator would pin an arbitrary language to whisper.
+  const ANCHORS = ["id", "title", "webpage_url", "duration", "uploader"] as const;
+  const hasAnchor = ANCHORS.some(
+    (k) => obj[k] !== undefined && obj[k] !== null
+  );
+  if (!hasAnchor) {
+    throw new Error(
+      "yt-dlp metadata payload is missing all anchor fields — likely a schema regression"
+    );
+  }
 
   const title = typeof obj.title === "string" ? obj.title : "";
   const description =

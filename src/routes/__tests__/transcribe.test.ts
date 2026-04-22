@@ -99,15 +99,22 @@ describe("POST /transcribe", () => {
     expect(JSON.stringify(body)).not.toContain("/opt/tmp");
   });
 
-  it("returns 500 when whisper fails", async () => {
+  it("returns 500 with generic body when whisper fails (no internal leak)", async () => {
+    // Generic body contract: a whisper-internal message must not reach
+    // the client. A regression returning `{ error: err.message }` would
+    // leak whisper/CTranslate2 internals.
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(whisperLib, "transcribeAudio").mockRejectedValue(
-      new Error("whisper crash")
+      new Error("whisper internal crash: /opt/models/tiny.bin missing")
     );
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toEqual({ error: "Transcription failed" });
+    expect(JSON.stringify(body)).not.toContain("whisper internal crash");
+    expect(JSON.stringify(body)).not.toContain("/opt/models");
   });
 });
 

@@ -57,16 +57,27 @@ export interface YtdlpMetadata {
   >;
 }
 
+// yt-dlp / franc sentinels that mean "no linguistic content" or "ambiguous" —
+// forwarding any of these to whisper as `--language zxx` produces a cryptic
+// CLI error. Treat as "no signal" and let callers fall through.
+const LANGUAGE_SENTINELS: ReadonlySet<string> = new Set([
+  "und", // undetermined — franc's "couldn't detect" output
+  "zxx", // no linguistic content — yt-dlp uses this for music-only tracks
+  "mul", // multiple languages
+  "mis", // uncoded languages
+]);
+
 /**
  * Normalize a language tag to ISO 639-1 primary subtag (lowercase 2-letter).
- * Accepts BCP-47 (`en-US` → `en`, `zh-Hans` → `zh`) and ISO 639-3 (`fra` →
- * `fr`, via the mapping table). Returns `null` for empty, `und`, or
- * unrecognized codes — callers treat null as "no signal" and fall through.
+ * Accepts BCP-47 2-letter-primary tags (`en-US` → `en`, `zh-Hans` → `zh`)
+ * through the regex branch, and ISO 639-3 3-letter codes (`fra` → `fr`) via
+ * the mapping table. Returns `null` for empty, sentinels (und/zxx/mul/mis),
+ * or unrecognized codes — callers treat null as "no signal" and fall through.
  */
 export function normalizeLanguageCode(code: string | null | undefined): string | null {
   if (!code) return null;
   const lower = code.toLowerCase().trim();
-  if (!lower || lower === "und") return null;
+  if (!lower || LANGUAGE_SENTINELS.has(lower)) return null;
 
   // Primary subtag already: "en", "fr", etc. Accept any 2-char lowercase.
   if (/^[a-z]{2}$/.test(lower)) return lower;
@@ -86,9 +97,13 @@ export function normalizeLanguageCode(code: string | null | undefined): string |
 /**
  * Derive the video's language from yt-dlp metadata. Priority order:
  *   1. `language` field (uploader-specified, authoritative).
- *   2. Sole manually-uploaded subtitle track (strong correlate of source lang).
+ *   2. Sole manually-uploaded subtitle track (2+ tracks is ambiguous — a
+ *      French-source uploader often ships fr + en, and picking one
+ *      arbitrarily reintroduces the tracks[0] bug class).
  *   3. Text detection on description + title via franc (heuristic fallback).
- *   4. "en" ultimate fallback.
+ *   4. `"en"` ultimate fallback, with a warn log so a high miss rate is
+ *      observable in production (a rising rate is a detection-quality
+ *      regression or a corpus of metadata-sparse videos we should fix).
  *
  * `automatic_captions` is NOT used as a signal — YouTube populates it with
  * many auto-translations regardless of source language.
@@ -101,15 +116,28 @@ export function detectLanguage(metadata: YtdlpMetadata): string {
   if (subtitleKeys.length === 1) {
     const normalized = normalizeLanguageCode(subtitleKeys[0]);
     if (normalized) return normalized;
+    // Unnormalizable single key (e.g. "??", "zxx") — fall through to
+    // text detection rather than trusting the bogus signal.
   }
 
   const text = `${metadata.title ?? ""} ${metadata.description ?? ""}`.trim();
+  let francResult: string | null = null;
   if (text.length >= MIN_TEXT_DETECTION_LENGTH) {
-    const francResult = franc(text);
+    francResult = franc(text);
     const normalized = normalizeLanguageCode(francResult);
     if (normalized) return normalized;
   }
 
+  // Everything failed. Log the fallback so a rising miss rate is alertable —
+  // a silent "en" here defeats the PR's purpose of pinning the right
+  // language to whisper.
+  console.warn("[language-detect] fallback to en (no usable signal)", {
+    errorId: "LANGUAGE_DETECT_FALLBACK",
+    hasLanguageField: Boolean(metadata.language),
+    subtitleKeyCount: subtitleKeys.length,
+    textLength: text.length,
+    francResult,
+  });
   return "en";
 }
 

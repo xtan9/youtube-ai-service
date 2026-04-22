@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   detectLanguage,
   normalizeLanguageCode,
@@ -51,6 +51,15 @@ describe("normalizeLanguageCode", () => {
     expect(normalizeLanguageCode(null)).toBeNull();
     expect(normalizeLanguageCode(undefined)).toBeNull();
   });
+
+  it.each([["zxx"], ["mul"], ["mis"], ["ZXX"], ["Mul"]])(
+    "treats yt-dlp sentinel %s as no-signal (null)",
+    (code) => {
+      // These codes reach whisper as `--language zxx` and produce cryptic
+      // CLI errors. Fall through rather than forward garbage.
+      expect(normalizeLanguageCode(code)).toBeNull();
+    }
+  );
 });
 
 describe("detectLanguage", () => {
@@ -116,8 +125,38 @@ describe("detectLanguage", () => {
   });
 
   it("falls back to 'en' when text is too short for confident detection", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = detectLanguage({ ...base, title: "Hi", description: "" });
     expect(result).toBe("en");
+  });
+
+  it("logs LANGUAGE_DETECT_FALLBACK with context when every signal fails", async () => {
+    // A silent "en" here defeats the whole point of the PR — a rising
+    // miss rate should be alertable. Lock the errorId + context shape
+    // so a future refactor can't drop the log.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    detectLanguage({ ...base, title: "Hi", description: "" });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("fallback to en"),
+      expect.objectContaining({
+        errorId: "LANGUAGE_DETECT_FALLBACK",
+        hasLanguageField: false,
+        subtitleKeyCount: 0,
+      })
+    );
+  });
+
+  it("falls through to text detection when the sole subtitle key is unnormalizable", () => {
+    // A subtitle track with a bogus key like "??" must NOT short-circuit
+    // the priority chain — the fallback to text detection is the whole
+    // point of having multiple signals.
+    const result = detectLanguage({
+      ...base,
+      subtitles: { "??": [{ url: "x", ext: "vtt" }] },
+      description:
+        "Ceci est un texte en français suffisamment long pour que la détection fonctionne correctement. Nous allons explorer plusieurs concepts.",
+    });
+    expect(result).toBe("fr");
   });
 
   it("does NOT treat automatic_captions keys as a language signal", () => {
@@ -125,6 +164,7 @@ describe("detectLanguage", () => {
     // regardless of the source language. Trusting this field would let a
     // captioned French video get labelled English (alphabetically first)
     // or arbitrary.
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = detectLanguage({
       ...base,
       automatic_captions: {

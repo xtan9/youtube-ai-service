@@ -133,6 +133,33 @@ describe("fetchYtdlpMetadata", () => {
     ).rejects.toThrow();
   });
 
+  it("throws when stdout parses but has no anchor fields (schema regression guard)", async () => {
+    // A `{}` response looks like a successful empty video — no id, no
+    // title, no URL. Collapsing it to all-defaults would let the route
+    // return 200 and the orchestrator would pin an arbitrary language
+    // to whisper. Catch the regression here at the boundary.
+    mockExecSuccess(JSON.stringify({}));
+    await expect(
+      fetchYtdlpMetadata("https://youtu.be/abc")
+    ).rejects.toThrow(/anchor/);
+  });
+
+  it("throws when stdout is a JSON array instead of object", async () => {
+    mockExecSuccess(JSON.stringify([]));
+    await expect(
+      fetchYtdlpMetadata("https://youtu.be/abc")
+    ).rejects.toThrow(/non-object/);
+  });
+
+  it("accepts a payload with `id` only (yt-dlp minimum)", async () => {
+    // Some uploads have no description, no uploader, no language — but
+    // every real video has an `id`. Don't over-tighten the guard.
+    mockExecSuccess(JSON.stringify({ id: "abc123" }));
+    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    expect(result.title).toBe("");
+    expect(result.language).toBeNull();
+  });
+
   it("truncates very long descriptions to 2000 chars", async () => {
     // yt-dlp's `description` is unbounded user content. Long descriptions
     // bloat JSON responses and log lines; 2000 chars is more than enough
