@@ -61,9 +61,18 @@ describe("POST /captions", () => {
     expect(await res.json()).toEqual({ error: "no_captions" });
   });
 
-  it("returns 200 with the full caption result on success", async () => {
+  it("returns 200 with segments + a derived transcript string on success", async () => {
+    // Wire response includes both `segments` (canonical) and `transcript`
+    // (derived). The transcript field is kept for one rollout window so a
+    // frontend deployment that hasn't picked up segments yet still works;
+    // a follow-up cleanup PR drops it. Drift here would either break the
+    // old frontend (transcript missing) or stop carrying timing to the
+    // new frontend (segments missing).
     const mockResult = {
-      transcript: "hello world",
+      segments: [
+        { text: "hello", start: 0, duration: 1 },
+        { text: "world", start: 1, duration: 1 },
+      ],
       source: "auto_captions" as const,
       language: "en" as const,
       title: "test video",
@@ -74,7 +83,10 @@ describe("POST /captions", () => {
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(mockResult);
+    expect(await res.json()).toEqual({
+      ...mockResult,
+      transcript: "hello world",
+    });
   });
 
   it("returns 500 with a generic message when fetchCaptions throws", async () => {

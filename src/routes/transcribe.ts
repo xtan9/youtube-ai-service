@@ -55,11 +55,17 @@ transcribe.post("/", async (c) => {
     audioPath = await downloadAudio(youtube_url);
     console.log(`Audio downloaded to: ${audioPath}`);
 
-    const transcript = await transcribeAudio(audioPath, lang);
-    console.log(`Transcription complete: ${transcript.length} characters`);
+    const segments = await transcribeAudio(audioPath, lang);
+    console.log(`Transcription complete: ${segments.length} segments`);
 
+    // Wire response carries `segments` (the canonical shape consumed by
+    // the new frontend) AND a derived `transcript` string (kept for one
+    // rollout window so a frontend that hasn't deployed yet keeps
+    // working). The follow-up cleanup PR drops `transcript` once the
+    // frontend is fully migrated.
     return c.json({
-      transcript,
+      segments,
+      transcript: segments.map((s) => s.text).join(" "),
       // Echo back what we pinned so callers know which language we
       // instructed whisper to produce. "auto" preserves the prior contract
       // when no hint was provided.

@@ -128,9 +128,17 @@ describe("fetchCaptions", () => {
   // but with `videoDetails: true` it actually returns a richer object that
   // production code casts. Match that runtime shape but cast to the
   // declared type so the mock satisfies TS.
+  //
+  // Each fixture segment ships with `offset` and `duration` because those
+  // flow into the response now — text-only fixtures would land in the
+  // assertion as start/duration=undefined and silently pass a NaN check.
   const ok = (segments: Partial<TranscriptSegment>[]) =>
     ({
-      segments,
+      segments: segments.map((s, i) => ({
+        offset: i,
+        duration: 1,
+        ...s,
+      })),
       videoDetails: { title: "t", author: "a" },
     } as unknown as TranscriptSegment[]);
 
@@ -213,19 +221,22 @@ describe("fetchCaptions", () => {
     );
   });
 
-  it("joins multi-segment transcripts and normalizes whitespace", async () => {
-    // Invariant: the joining pipeline (`join(" ") + collapse + trim`)
-    // must not produce double-spaces, leading/trailing whitespace, or
-    // preserve embedded \n\t runs. A refactor to `.join("\n")` would
-    // break this test.
+  it("preserves segment text verbatim and pairs each with its timing data", async () => {
+    // Segments are now the source of truth. The frontend renders them
+    // chunked into paragraphs at display time, so the lib must hand them
+    // through unmodified — a refactor that re-introduced whitespace
+    // collapse here would silently corrupt the text the LLM sees.
     mockedFetchTranscript.mockResolvedValue(
       ok([
-        { text: "  hello\tworld  ", lang: "en" },
-        { text: "\n\n  foo  ", lang: "en" },
+        { text: "  hello\tworld  ", lang: "en", offset: 0, duration: 2 },
+        { text: "foo", lang: "en", offset: 2, duration: 1.5 },
       ])
     );
     const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
-    expect(result?.transcript).toBe("hello world foo");
+    expect(result?.segments).toEqual([
+      { text: "  hello\tworld  ", start: 0, duration: 2 },
+      { text: "foo", start: 2, duration: 1.5 },
+    ]);
   });
 
   it("returns null metadata fields when videoDetails is undefined (not empty string)", async () => {
@@ -243,13 +254,16 @@ describe("fetchCaptions", () => {
   it("maps the full happy path to a CaptionResult", async () => {
     mockedFetchTranscript.mockResolvedValue(
       ok([
-        { text: "hello", lang: "zh-CN" },
-        { text: "world", lang: "zh-CN" },
+        { text: "hello", lang: "zh-CN", offset: 0, duration: 1 },
+        { text: "world", lang: "zh-CN", offset: 1, duration: 2 },
       ])
     );
     const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
     expect(result).toEqual({
-      transcript: "hello world",
+      segments: [
+        { text: "hello", start: 0, duration: 1 },
+        { text: "world", start: 1, duration: 2 },
+      ],
       source: "auto_captions",
       language: "zh",
       title: "t",

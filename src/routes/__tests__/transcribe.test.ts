@@ -51,15 +51,24 @@ describe("POST /transcribe", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 200 with language='auto' when no lang provided (back-compat)", async () => {
-    // Pre-PR clients send `{youtube_url}` only and expect `language: "auto"`
-    // in the response. Preserve that exact shape.
-    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue("hello world");
+  it("returns 200 with segments + derived transcript and language='auto' when no lang (back-compat)", async () => {
+    // Wire response includes `segments` (canonical) and `transcript`
+    // (derived from segments). The transcript field is kept for one
+    // rollout window so a frontend that hasn't picked up segments yet
+    // still works.
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([
+      { text: "hello", start: 0, duration: 1 },
+      { text: "world", start: 1, duration: 1 },
+    ]);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
+      segments: [
+        { text: "hello", start: 0, duration: 1 },
+        { text: "world", start: 1, duration: 1 },
+      ],
       transcript: "hello world",
       language: "auto",
       source: "whisper",
@@ -72,7 +81,7 @@ describe("POST /transcribe", () => {
     // silently dropped and whisper would keep auto-detecting.
     const spy = vi
       .spyOn(whisperLib, "transcribeAudio")
-      .mockResolvedValue("bonjour");
+      .mockResolvedValue([{ text: "bonjour", start: 0, duration: 1 }]);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
       lang: "fr",
