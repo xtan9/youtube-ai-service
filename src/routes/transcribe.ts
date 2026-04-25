@@ -58,14 +58,36 @@ transcribe.post("/", async (c) => {
     const segments = await transcribeAudio(audioPath, lang);
     console.log(`Transcription complete: ${segments.length} segments`);
 
+    // Empty whisper output is the symmetric twin of the captions path's
+    // CAPTION_EMPTY_TRANSCRIPT case — silently shipping `transcript: ""`
+    // would let a VAD misconfiguration / yt-dlp encoding bug / model
+    // upgrade artifact land as success-shaped 200, then produce a garbage
+    // LLM summary downstream. Surface as 500 so the route's existing
+    // "alert and skip cache" path classifies it correctly.
+    if (segments.length === 0) {
+      console.error(`[transcribe] WHISPER_EMPTY_RESULT for video ${videoId}`, {
+        errorId: "WHISPER_EMPTY_RESULT",
+        videoId,
+      });
+      return c.json({ error: "Transcription produced no content" }, 500);
+    }
+
     // Wire response carries `segments` (the canonical shape consumed by
     // the new frontend) AND a derived `transcript` string (kept for one
     // rollout window so a frontend that hasn't deployed yet keeps
     // working). The follow-up cleanup PR drops `transcript` once the
     // frontend is fully migrated.
+    //
+    // The derived string preserves the pre-PR whitespace normalization
+    // (`join(" ").replace(/\s+/g, " ").trim()`) so an old frontend's
+    // text-hash / dedupe behaviour matches what it saw before.
     return c.json({
       segments,
-      transcript: segments.map((s) => s.text).join(" "),
+      transcript: segments
+        .map((s) => s.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim(),
       // Echo back what we pinned so callers know which language we
       // instructed whisper to produce. "auto" preserves the prior contract
       // when no hint was provided.

@@ -108,6 +108,47 @@ describe("POST /transcribe", () => {
     expect(JSON.stringify(body)).not.toContain("/opt/tmp");
   });
 
+  it("normalizes whitespace in the derived transcript (matches pre-PR contract)", async () => {
+    // Mirror of the captions-route normalization test: the derived
+    // `transcript` field preserves the pre-PR `replace(/\s+/g, " ").trim()`
+    // normalization so an old frontend that hashed/length-gated the field
+    // sees the same byte sequence during the rollout window. Segments
+    // themselves stay verbatim — this is purely about the legacy alias.
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([
+      { text: "  hello\tworld  ", start: 0, duration: 1 },
+      { text: "\n\n  foo  ", start: 1, duration: 1 },
+    ]);
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    const body = (await res.json()) as { transcript: string };
+    expect(body.transcript).toBe("hello world foo");
+  });
+
+  it("returns 500 with WHISPER_EMPTY_RESULT when whisper produces zero usable segments", async () => {
+    // Symmetric of the captions path's CAPTION_EMPTY_TRANSCRIPT — silently
+    // shipping `transcript: ""` would let a VAD misconfig / yt-dlp
+    // encoding bug / model upgrade artifact land as a 200 success and
+    // produce a garbage LLM summary downstream. Surfacing as 500 routes
+    // it through the existing alert + skip-cache path.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([]);
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: "Transcription produced no content",
+    });
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining("WHISPER_EMPTY_RESULT"),
+      expect.objectContaining({
+        errorId: "WHISPER_EMPTY_RESULT",
+        videoId: "dQw4w9WgXcQ",
+      })
+    );
+  });
+
   it("returns 500 with generic body when whisper fails (no internal leak)", async () => {
     // Generic body contract: a whisper-internal message must not reach
     // the client. A regression returning `{ error: err.message }` would

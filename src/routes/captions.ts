@@ -68,9 +68,18 @@ captions.post("/", async (c) => {
     // rollout window so a frontend that hasn't deployed yet keeps
     // working). The follow-up cleanup PR drops `transcript` once the
     // frontend is fully migrated.
+    //
+    // The derived string preserves the pre-PR whitespace normalization
+    // (`join(" ").replace(/\s+/g, " ").trim()`). An old frontend that
+    // hashed/length-gated the transcript would otherwise see a
+    // different value for the same video during the rollout window.
     return c.json({
       ...result,
-      transcript: result.segments.map((s) => s.text).join(" "),
+      transcript: result.segments
+        .map((s) => s.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim(),
     });
   } catch (err) {
     const message =

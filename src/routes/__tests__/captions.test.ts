@@ -89,6 +89,29 @@ describe("POST /captions", () => {
     });
   });
 
+  it("normalizes whitespace in the derived transcript (matches pre-PR contract)", async () => {
+    // The pre-PR captions path joined and then `.replace(/\s+/g, " ").trim()`-ed
+    // the transcript. An old frontend that hashed / length-gated the field
+    // would otherwise see a different value for the same video during the
+    // rollout window. The route preserves the legacy normalization on the
+    // derived string while keeping the segments themselves verbatim.
+    vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue({
+      segments: [
+        { text: "  hello\tworld  ", start: 0, duration: 1 },
+        { text: "\n\n  foo  ", start: 1, duration: 1 },
+      ],
+      source: "auto_captions" as const,
+      language: "en" as const,
+      title: "t",
+      channelName: "c",
+    });
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    const body = (await res.json()) as { transcript: string };
+    expect(body.transcript).toBe("hello world foo");
+  });
+
   it("returns 500 with a generic message when fetchCaptions throws", async () => {
     // Captions lib throws only on unexpected errors (library schema
     // drift, network, parse failure). We return a generic string to the

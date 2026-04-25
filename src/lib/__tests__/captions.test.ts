@@ -283,6 +283,26 @@ describe("fetchCaptions", () => {
     expect(call[1]).not.toHaveProperty("lang");
   });
 
+  it("calls pickLocale with the RAW library segments, not the mapped {start,duration,text} ones", async () => {
+    // Subtle invariant: `pickLocale` reads `segments[0].lang` to pick the
+    // prompt template. Our mapped `TranscriptSegment` shape doesn't carry
+    // a `lang` field — only the raw library segments do. A "tidy this up"
+    // refactor that swapped `pickLocale(ytSegments, ...)` to
+    // `pickLocale(segments, ...)` would silently route every Chinese
+    // video to the English prompt. Pin the contract via a happy-path
+    // assertion that depends on lang resolution working through.
+    mockedFetchTranscript.mockResolvedValue(
+      ok([{ text: "你好", lang: "zh-CN", offset: 0, duration: 1 }])
+    );
+    const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    // language === "zh" can ONLY come from the raw `lang: "zh-CN"` field —
+    // mapped segments lack `lang` so pickLocale would default to "en".
+    expect(result?.language).toBe("zh");
+    // And the mapped segment carries no `lang` field — proves the two
+    // arrays are distinct.
+    expect(result?.segments[0]).not.toHaveProperty("lang");
+  });
+
   it("forwards `lang` to the library when provided (pins caption track)", async () => {
     // The whole point of this parameter: without it, the library picks
     // `tracks[0]` which for some videos is the wrong language entirely.
