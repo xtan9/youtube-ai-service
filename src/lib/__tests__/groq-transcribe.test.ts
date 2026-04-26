@@ -111,4 +111,84 @@ describe("transcribeViaGroq", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
   });
+
+  it("does NOT retry on 500 — throws GroqTranscribeError(500) immediately", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("boom", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: 500,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies fetch network failures as status='network'", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(
+      Object.assign(new Error("ECONNRESET"), { name: "TypeError" })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: "network",
+    });
+  });
+
+  it("classifies AbortSignal.timeout as status='timeout'", async () => {
+    const timeoutErr = new Error("aborted");
+    timeoutErr.name = "TimeoutError";
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(timeoutErr));
+
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: "timeout",
+    });
+  });
+
+  it("throws status='schema' when Groq returns malformed JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("not json", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      )
+    );
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: "schema",
+    });
+  });
+
+  it("throws status='schema' when Groq returns missing-segments payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(okResponse({ language: "en" }))
+    );
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: "schema",
+    });
+  });
+
+  it("throws status='schema' when every segment is empty / whitespace", async () => {
+    // Symmetric with WHISPER_EMPTY_RESULT in the local Whisper path.
+    // A success-shaped 200 with no usable segments must bubble up as a
+    // failure rather than silently producing an empty transcript that
+    // burns LLM tokens on nothing.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okResponse({
+          language: "en",
+          segments: [
+            { start: 0, end: 1, text: "   " },
+            { start: 1, end: 2, text: "" },
+          ],
+        })
+      )
+    );
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: "schema",
+    });
+  });
 });
