@@ -49,4 +49,31 @@ describe("transcribeViaGroq", () => {
     ]);
     expect(result.language).toBe("en");
   });
+
+  it("forwards lang as the `language` form field when provided", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip.mp3", "fr");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const formData = init.body as FormData;
+    expect(formData.get("language")).toBe("fr");
+    expect(formData.get("model")).toBe("whisper-large-v3-turbo");
+    expect(formData.get("response_format")).toBe("verbose_json");
+  });
+
+  it("omits `language` from the form when no lang arg is provided", async () => {
+    // Sending `language: undefined` would be rejected by Groq's strict
+    // multipart parser (some shapes return 400, some silently ignore).
+    // Omitting the field entirely lets Groq's auto-detect run.
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip.mp3");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const formData = init.body as FormData;
+    expect(formData.get("language")).toBeNull();
+  });
 });
