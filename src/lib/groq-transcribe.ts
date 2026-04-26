@@ -54,15 +54,28 @@ export async function transcribeViaGroq(
   }
 
   const model = process.env.GROQ_MODEL || DEFAULT_MODEL;
-  const timeoutMs = Number(process.env.GROQ_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
+  // `Number.isFinite && > 0` (not `||`) so an explicit `0` doesn't get
+  // silently rewritten to the default — same convention the frontend's
+  // MAX_TRANSCRIBE_DURATION_SECONDS parser uses.
+  const rawTimeout = Number(process.env.GROQ_TIMEOUT_MS);
+  const timeoutMs =
+    Number.isFinite(rawTimeout) && rawTimeout > 0
+      ? rawTimeout
+      : DEFAULT_TIMEOUT_MS;
 
   const fileBytes = await readFile(audioPath);
   const buildBody = () => {
     const body = new FormData();
     body.append(
       "file",
+      // Groq's API ignores the multipart MIME and trusts the filename
+      // extension for format detection, so a single hardcoded MIME is
+      // safe across yt-dlp's output formats (mp3 / m4a / opus / webm).
       new Blob([fileBytes], { type: "audio/mpeg" }),
-      audioPath.split("/").pop() ?? "audio.mp3"
+      // `||` (not `??`) so empty string + paths ending in `/` also fall
+      // through to the default filename. Defensive — yt-dlp produces
+      // real paths in practice.
+      audioPath.split("/").pop() || "audio.mp3"
     );
     body.append("model", model);
     body.append("response_format", "verbose_json");
