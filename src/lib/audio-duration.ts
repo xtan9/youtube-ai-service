@@ -29,6 +29,20 @@ export async function probeAudioDurationSeconds(
       { timeout: FFPROBE_TIMEOUT_MS, maxBuffer: 1 * 1024 * 1024 },
       (error, out) => {
         if (error) {
+          // Distinct from "audio is malformed" — this is ffprobe
+          // itself failing (missing binary, OOM, timeout). Operators
+          // need to distinguish these from "video legitimately
+          // unbounded" when GROQ_FAILED_NO_FALLBACK fires with
+          // audioSeconds: null.
+          console.error(
+            "[audio-duration] FFPROBE_EXEC_FAILED",
+            {
+              errorId: "FFPROBE_EXEC_FAILED",
+              audioPath,
+              errorName: error instanceof Error ? error.name : "unknown",
+              message: error instanceof Error ? error.message.slice(0, 200) : String(error),
+            }
+          );
           resolve(null);
           return;
         }
@@ -42,7 +56,12 @@ export async function probeAudioDurationSeconds(
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
-  } catch {
+  } catch (err) {
+    console.error("[audio-duration] FFPROBE_JSON_PARSE_FAILED", {
+      errorId: "FFPROBE_JSON_PARSE_FAILED",
+      audioPath,
+      message: err instanceof Error ? err.message.slice(0, 200) : String(err),
+    });
     return null;
   }
 
@@ -53,14 +72,34 @@ export async function probeAudioDurationSeconds(
     typeof (parsed as { format: unknown }).format !== "object" ||
     (parsed as { format: unknown }).format === null
   ) {
+    console.error("[audio-duration] FFPROBE_SCHEMA_INVALID", {
+      errorId: "FFPROBE_SCHEMA_INVALID",
+      audioPath,
+      reason: "missing or non-object 'format' field",
+    });
     return null;
   }
   const format = (parsed as { format: Record<string, unknown> }).format;
   const raw = format.duration;
-  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    console.error("[audio-duration] FFPROBE_DURATION_INVALID", {
+      errorId: "FFPROBE_DURATION_INVALID",
+      audioPath,
+      rawType: typeof raw,
+    });
+    return null;
+  }
 
   const seconds = typeof raw === "number" ? raw : Number(raw);
-  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    console.error("[audio-duration] FFPROBE_DURATION_INVALID", {
+      errorId: "FFPROBE_DURATION_INVALID",
+      audioPath,
+      rawValue: typeof raw === "string" ? raw.slice(0, 50) : raw,
+      parsedSeconds: seconds,
+    });
+    return null;
+  }
 
   return seconds;
 }
