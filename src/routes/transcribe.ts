@@ -3,8 +3,14 @@ import { z } from "zod";
 import { downloadAudio, cleanupAudio } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import { extractVideoId } from "../lib/captions.js";
+import type { TranscriptSegment } from "../lib/captions.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { probeAudioDurationSeconds } from "../lib/audio-duration.js";
+import {
+  GroqTranscribeError,
+  transcribeViaGroq,
+} from "../lib/groq-transcribe.js";
 
 const transcribe = new Hono();
 
@@ -55,7 +61,70 @@ transcribe.post("/", async (c) => {
     audioPath = await downloadAudio(youtube_url);
     console.log(`Audio downloaded to: ${audioPath}`);
 
-    const segments = await transcribeAudio(audioPath, lang);
+    const hasGroqKey = Boolean(process.env.GROQ_API_KEY?.trim());
+
+    let segments: TranscriptSegment[];
+
+    if (!hasGroqKey) {
+      // Deploy-window safety net: code merged but secret not yet set.
+      // Skip Groq entirely and use local Whisper at any length so the
+      // rollout itself can't break a 3-10 min video that local Whisper
+      // currently handles.
+      console.error(
+        `[transcribe] GROQ_API_KEY_MISSING for video ${videoId}`,
+        { errorId: "GROQ_API_KEY_MISSING", videoId }
+      );
+      segments = await transcribeAudio(audioPath, lang);
+    } else {
+      try {
+        segments = (await transcribeViaGroq(audioPath, lang)).segments;
+      } catch (err) {
+        if (!(err instanceof GroqTranscribeError)) throw err;
+
+        // Probe duration only on the fallback path — the happy path
+        // (Groq succeeds) shouldn't pay the extra ffprobe cost.
+        const audioSeconds = await probeAudioDurationSeconds(audioPath);
+        const fallbackCap =
+          Number(process.env.GROQ_LOCAL_FALLBACK_MAX_SECONDS) || 180;
+        // audioSeconds === null means ffprobe failed; fail closed (treat
+        // as "too long for fallback") so a noisy probe doesn't promote
+        // a routine Groq blip into a multi-minute local-Whisper attempt
+        // for a video we can't bound.
+        const eligibleForFallback =
+          audioSeconds !== null && audioSeconds <= fallbackCap;
+
+        if (eligibleForFallback) {
+          console.warn(
+            `[transcribe] GROQ_FALLBACK for video ${videoId}`,
+            {
+              errorId: "GROQ_FALLBACK",
+              videoId,
+              audioSeconds,
+              groqStatus: err.status,
+            }
+          );
+          segments = await transcribeAudio(audioPath, lang);
+        } else {
+          console.error(
+            `[transcribe] GROQ_FAILED_NO_FALLBACK for video ${videoId}`,
+            {
+              errorId: "GROQ_FAILED_NO_FALLBACK",
+              videoId,
+              audioSeconds,
+              fallbackCap,
+              groqStatus: err.status,
+            }
+          );
+          return c.json(
+            {
+              error:
+                "Transcription service is temporarily unavailable. Please try again in a few minutes.",
+            },
+            503
+          );
+        }
+      }
+    }
     console.log(`Transcription complete: ${segments.length} segments`);
 
     // Empty whisper output is the symmetric twin of the captions path's
