@@ -551,13 +551,23 @@ describe("fetchCaptions", () => {
         .mockRejectedValueOnce(new TypeError("boom"));
 
       vi.spyOn(console, "warn").mockImplementation(() => {});
-      vi.spyOn(console, "error").mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       await expect(
         fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "zh")
       ).rejects.toBeInstanceOf(TypeError);
 
       expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[captions] CAPTION_UNEXPECTED_FAILURE",
+        expect.objectContaining({
+          errorId: "CAPTION_UNEXPECTED_FAILURE",
+          videoId: "dQw4w9WgXcQ",
+          errorClass: "TypeError",
+          originalLang: "zh",
+          retryLang: "zh-Hans",
+        })
+      );
     });
 
     it("picks the first matching variant in availableLangs order (preserves YouTube's track order)", async () => {

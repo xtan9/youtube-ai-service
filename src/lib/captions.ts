@@ -231,6 +231,8 @@ export async function fetchCaptions(
               ? retryErr.constructor.name
               : typeof retryErr,
           err: retryErr,
+          originalLang: lang,
+          retryLang: matched,
         });
         throw retryErr;
       }
