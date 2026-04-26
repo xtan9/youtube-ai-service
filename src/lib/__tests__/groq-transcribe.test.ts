@@ -170,11 +170,13 @@ describe("transcribeViaGroq", () => {
     });
   });
 
-  it("throws status='schema' when every segment is empty / whitespace", async () => {
-    // Symmetric with WHISPER_EMPTY_RESULT in the local Whisper path.
-    // A success-shaped 200 with no usable segments must bubble up as a
-    // failure rather than silently producing an empty transcript that
-    // burns LLM tokens on nothing.
+  it("returns empty segments when every Groq segment is empty / whitespace", async () => {
+    // Symmetric with the local-Whisper path: an all-whitespace response
+    // is "no content," handled identically by the route's length check
+    // at the bottom (WHISPER_EMPTY_RESULT → 500). Throwing here would
+    // route through the Groq-failure catch and either fall back to
+    // local (wasteful: same source audio, same outcome) or return 503
+    // (misleading: Groq actually responded, just empty).
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -187,8 +189,32 @@ describe("transcribeViaGroq", () => {
         })
       )
     );
-    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
-      status: "schema",
-    });
+    const result = await transcribeViaGroq("/tmp/clip.mp3");
+    expect(result.segments).toEqual([]);
+    expect(result.language).toBe("en");
+  });
+
+  it("coerces a segment whose start > end to duration=0 (defensive)", async () => {
+    // Groq's contract guarantees start ≤ end, but the impl applies
+    // Math.max(0, end - start) defensively. Without this test, a future
+    // refactor that drops the floor could silently produce negative
+    // durations that break the frontend's clickable-timestamp math.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        okResponse({
+          language: "en",
+          segments: [
+            { start: 5, end: 3, text: "weird" },
+            { start: 10, end: 11, text: "normal" },
+          ],
+        })
+      )
+    );
+    const result = await transcribeViaGroq("/tmp/clip.mp3");
+    expect(result.segments).toEqual([
+      { text: "weird", start: 5, duration: 0 },
+      { text: "normal", start: 10, duration: 1 },
+    ]);
   });
 });

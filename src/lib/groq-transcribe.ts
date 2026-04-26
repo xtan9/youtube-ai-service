@@ -134,9 +134,11 @@ export async function transcribeViaGroq(
       duration: Math.max(0, s.end - s.start),
     });
   }
-  if (segments.length === 0) {
-    throw new GroqTranscribeError("schema", "empty segments");
-  }
-
+  // Return empty segments verbatim — the route's existing length check
+  // handles "no usable content" identically for both this backend and
+  // the local-Whisper fallback path (WHISPER_EMPTY_RESULT). Throwing
+  // here would break that symmetry by routing the response through the
+  // Groq-failure catch (fallback / 503) instead of the cleaner 500 +
+  // "Transcription produced no content."
   return { segments, language: parsed.data.language ?? lang ?? "auto" };
 }
