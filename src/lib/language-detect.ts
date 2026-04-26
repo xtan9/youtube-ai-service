@@ -51,10 +51,12 @@ export interface YtdlpMetadata {
   readonly title: string;
   readonly description: string;
   readonly language: string | null;
-  // Length in seconds. `null` for live streams and the rare yt-dlp
-  // payload that omits the field — callers that gate behavior on
-  // duration must treat null as "unknown" and fall through, never as
-  // zero (which would unconditionally pass any "too long?" check).
+  // Length in seconds (non-negative finite, may be fractional).
+  // `null` for live streams, omitted payloads, and any non-finite or
+  // negative value rejected by the normalizer — callers that gate
+  // behavior on duration must treat null as "unknown" and fall
+  // through, never as zero (which would unconditionally pass any
+  // "too long?" check).
   readonly duration: number | null;
   readonly subtitles: Readonly<Record<string, readonly YtdlpCaptionTrack[]>>;
   readonly automatic_captions: Readonly<

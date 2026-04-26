@@ -4,7 +4,7 @@ Lightweight transcription microservice. Part of the YouTube AI Chat stack.
 
 ## Endpoints
 
-- `POST /metadata` — Extract video metadata (title, description, detected language, available caption track codes) via `yt-dlp --dump-json`. Call this first so the orchestrator can pin caption + whisper language and avoid the default "pick tracks[0]" bug that produced wrong-language transcripts.
+- `POST /metadata` — Extract video metadata (title, description, detected language, duration in seconds or `null`, available caption track codes) via `yt-dlp --dump-json`. Call this first so the orchestrator can pin caption + whisper language and avoid the default "pick tracks[0]" bug that produced wrong-language transcripts. `duration` lets callers fail fast on videos too long for the no-captions Whisper fallback to finish inside `VPS_TIMEOUT_MS`.
 - `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional `lang` (ISO 639-1 or BCP-47) that forwards to `youtube-transcript-plus` so a specific caption track is selected. Returns 200 with `{ transcript, source, language, title, channelName }` or 404 `{ error: "no_captions" }` if the track isn't available. Much cheaper than transcription — call this before `/transcribe`.
 - `POST /transcribe` — Download audio via yt-dlp and transcribe with whisper-ctranslate2. Accepts an optional `lang` that forwards to whisper as `--language <code>` to bypass auto-detect. Fallback when captions aren't available.
 - `GET /health` — Health check (unauthenticated).

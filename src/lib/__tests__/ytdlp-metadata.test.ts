@@ -118,7 +118,19 @@ describe("fetchYtdlpMetadata", () => {
   it.each([
     ["null", null],
     ["undefined (omitted)", undefined],
-    ["string", "10:30"],
+    // Numeric string is the realistic regression vector — a future
+    // maintainer adding `Number(obj.duration)` "to be helpful" would
+    // accept "213" as 213, silently passing the too-long gate when a
+    // yt-dlp version drift starts emitting strings.
+    ["numeric string", "213"],
+    ["non-numeric string", "10:30"],
+    // Booleans and objects are the well-meaning-coercion footguns —
+    // `Number(true)` is 1, `Number({})` is NaN. The strict typeof
+    // check rejects both before any arithmetic touches them.
+    ["boolean true", true],
+    ["boolean false", false],
+    ["object", { seconds: 213 }],
+    ["array", [213]],
     ["NaN", NaN],
     ["Infinity", Infinity],
     ["-Infinity", -Infinity],
