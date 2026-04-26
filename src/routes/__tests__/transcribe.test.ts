@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { transcribe } from "../transcribe.js";
 import * as ytdlpLib from "../../lib/ytdlp.js";
 import * as whisperLib from "../../lib/whisper.js";
@@ -62,6 +62,28 @@ describe("POST /transcribe", () => {
       lang,
     });
     expect(res.status).toBe(400);
+  });
+
+  it("logs GROQ_API_KEY_MISSING when the key is unset (deploy-window safety net)", async () => {
+    // The blanket console.error mock in the outer beforeEach hides this
+    // log on every other test; assert it fires here so a future change
+    // that drops the breadcrumb gets caught. Operators rely on this
+    // signal to detect "secret didn't reach the container."
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([
+      { text: "hi", start: 0, duration: 1 },
+    ]);
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(res.status).toBe(200);
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining("GROQ_API_KEY_MISSING"),
+      expect.objectContaining({
+        errorId: "GROQ_API_KEY_MISSING",
+        videoId: "dQw4w9WgXcQ",
+      })
+    );
   });
 
   it("returns 200 with segments + derived transcript and language='auto' when no lang (back-compat)", async () => {
@@ -190,6 +212,11 @@ describe("POST /transcribe — Groq orchestration", () => {
     vi.spyOn(ytdlpLib, "cleanupAudio").mockResolvedValue(undefined);
   });
 
+  afterEach(() => {
+    delete process.env.GROQ_API_KEY;
+    delete process.env.GROQ_LOCAL_FALLBACK_MAX_SECONDS;
+  });
+
   it("uses Groq when configured (positive control: long audio still uses Groq, ffprobe not called)", async () => {
     const groqSpy = vi.spyOn(groqLib, "transcribeViaGroq").mockResolvedValue({
       segments: [{ text: "groq", start: 0, duration: 1 }],
@@ -273,6 +300,7 @@ describe("POST /transcribe — Groq orchestration", () => {
         groqStatus: "network",
       })
     );
+    expect(ytdlpLib.cleanupAudio).toHaveBeenCalledWith("/tmp/fake.mp3");
   });
 
   it("returns 503 when Groq fails and ffprobe can't determine length (fail-closed)", async () => {
@@ -289,6 +317,7 @@ describe("POST /transcribe — Groq orchestration", () => {
 
     expect(res.status).toBe(503);
     expect(localSpy).not.toHaveBeenCalled();
+    expect(ytdlpLib.cleanupAudio).toHaveBeenCalledWith("/tmp/fake.mp3");
   });
 
   it("re-throws non-GroqTranscribeError (programmer errors must surface)", async () => {
@@ -308,6 +337,33 @@ describe("POST /transcribe — Groq orchestration", () => {
 
     expect(res.status).toBe(500);
     expect(localSpy).not.toHaveBeenCalled();
+  });
+
+  it("uses local Whisper at any length when GROQ_API_KEY is unset (no fallback cap applies)", async () => {
+    // Locks the "no cap when unconfigured" deploy-window contract: the
+    // fallback cap (180s) only applies AFTER Groq has been attempted
+    // and failed. When Groq is never attempted, local Whisper handles
+    // the full audio regardless of length — same as today's behavior
+    // before this PR.
+    delete process.env.GROQ_API_KEY;
+    const groqSpy = vi.spyOn(groqLib, "transcribeViaGroq");
+    const probeSpy = vi.spyOn(audioDurationLib, "probeAudioDurationSeconds");
+    const localSpy = vi
+      .spyOn(whisperLib, "transcribeAudio")
+      .mockResolvedValue([{ text: "long-clip transcript", start: 0, duration: 1 }]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+
+    expect(res.status).toBe(200);
+    expect(groqSpy).not.toHaveBeenCalled();
+    // Pin the optimization: with no Groq attempt, no fallback decision,
+    // there is also no reason to probe duration. A regression that
+    // calls probe in the unconfigured branch would fire here.
+    expect(probeSpy).not.toHaveBeenCalled();
+    expect(localSpy).toHaveBeenCalledWith("/tmp/fake.mp3", undefined);
   });
 });
 
