@@ -76,4 +76,39 @@ describe("transcribeViaGroq", () => {
     const formData = init.body as FormData;
     expect(formData.get("language")).toBeNull();
   });
+
+  it("retries once on 429 with backoff and succeeds on the second attempt", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockResolvedValueOnce(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = transcribeViaGroq("/tmp/clip.mp3");
+    // Advance through the 2s backoff so the second call fires.
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await promise;
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.segments.length).toBeGreaterThan(0);
+    vi.useRealTimers();
+  });
+
+  it("throws GroqTranscribeError(429) when both attempts return 429", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("rate limited", { status: 429 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = transcribeViaGroq("/tmp/clip.mp3");
+    const caught = promise.catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(2_000);
+    const err = await caught;
+    expect(err).toBeInstanceOf(GroqTranscribeError);
+    expect(err).toMatchObject({ status: 429 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
 });
