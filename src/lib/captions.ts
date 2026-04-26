@@ -64,14 +64,31 @@ const NAMED_XML_ENTITIES: Readonly<Record<string, string>> = {
   "&nbsp;": " ",
 };
 
+// `String.fromCodePoint` throws RangeError for values > 0x10FFFF (e.g.
+// adversarial `&#999999999999;`). A defensive decoder must never throw —
+// a single malformed entity would otherwise crash the whole captions
+// fetch. Return the original match unchanged when the codepoint is out
+// of range so downstream sees the raw entity instead of a 500.
+const MAX_UNICODE_CODEPOINT = 0x10ffff;
+function safeFromCodePoint(cp: number, originalMatch: string): string {
+  if (!Number.isFinite(cp) || cp < 0 || cp > MAX_UNICODE_CODEPOINT) {
+    return originalMatch;
+  }
+  try {
+    return String.fromCodePoint(cp);
+  } catch {
+    return originalMatch;
+  }
+}
+
 function decodeEntitiesOnce(text: string): string {
   return text
     .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (m) => NAMED_XML_ENTITIES[m] ?? m)
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
-      String.fromCodePoint(parseInt(hex, 16))
+    .replace(/&#x([0-9a-fA-F]+);/g, (m, hex) =>
+      safeFromCodePoint(parseInt(hex, 16), m)
     )
-    .replace(/&#(\d+);/g, (_, dec) =>
-      String.fromCodePoint(parseInt(dec, 10))
+    .replace(/&#(\d+);/g, (m, dec) =>
+      safeFromCodePoint(parseInt(dec, 10), m)
     );
 }
 

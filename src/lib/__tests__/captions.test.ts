@@ -154,6 +154,38 @@ describe("decodeCaptionEntities", () => {
     // Non-ASCII passes through.
     expect(decodeCaptionEntities("café — naïve")).toBe("café — naïve");
   });
+
+  it("handles supplementary-plane codepoints (emoji, > 0xFFFF)", () => {
+    // U+1F600 GRINNING FACE = 128512
+    expect(decodeCaptionEntities("hi &#128512;!")).toBe("hi 😀!");
+    expect(decodeCaptionEntities("&#x1F600;")).toBe("😀");
+  });
+
+  it("does not throw on out-of-range numeric entities (returns original)", () => {
+    // > 0x10FFFF: String.fromCodePoint would throw RangeError. The
+    // decoder must return the raw entity unchanged so a single
+    // malformed entity can't 500 an entire captions fetch.
+    expect(() => decodeCaptionEntities("bad &#999999999999;")).not.toThrow();
+    expect(decodeCaptionEntities("bad &#999999999999;")).toBe(
+      "bad &#999999999999;"
+    );
+    expect(decodeCaptionEntities("bad &#xFFFFFFFF;")).toBe("bad &#xFFFFFFFF;");
+  });
+
+  it("preserves malformed entity-like substrings unchanged", () => {
+    // Missing semicolon, missing digits, named-but-unknown — all should
+    // pass through as-is rather than partial-match into garbage.
+    expect(decodeCaptionEntities("a &amp b")).toBe("a &amp b"); // no `;`
+    expect(decodeCaptionEntities("a &; b")).toBe("a &; b");
+    expect(decodeCaptionEntities("a &#; b")).toBe("a &#; b");
+    expect(decodeCaptionEntities("a &foo; b")).toBe("a &foo; b");
+  });
+
+  it("handles mixed entities in one string", () => {
+    expect(
+      decodeCaptionEntities("Tom &amp; &#39;Jerry&#39; &#x2014; fin")
+    ).toBe("Tom & 'Jerry' — fin");
+  });
 });
 
 describe("fetchCaptions", () => {
