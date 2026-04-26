@@ -63,7 +63,24 @@ captions.post("/", async (c) => {
     //         silently since that masks real problems behind compute bills)
     if (!result) return c.json({ error: "no_captions" }, 404);
 
-    return c.json(result);
+    // Wire response carries `segments` (the canonical shape consumed by
+    // the new frontend) AND a derived `transcript` string (kept for one
+    // rollout window so a frontend that hasn't deployed yet keeps
+    // working). The follow-up cleanup PR drops `transcript` once the
+    // frontend is fully migrated.
+    //
+    // The derived string preserves the pre-PR whitespace normalization
+    // (`join(" ").replace(/\s+/g, " ").trim()`). An old frontend that
+    // hashed/length-gated the transcript would otherwise see a
+    // different value for the same video during the rollout window.
+    return c.json({
+      ...result,
+      transcript: result.segments
+        .map((s) => s.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Caption fetch failed";

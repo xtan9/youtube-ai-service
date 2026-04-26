@@ -6,7 +6,7 @@ import {
   YoutubeTranscriptNotAvailableLanguageError,
   YoutubeTranscriptVideoUnavailableError,
   type TranscriptResult,
-  type TranscriptSegment,
+  type TranscriptSegment as YtTranscriptSegment,
 } from "youtube-transcript-plus";
 
 // Caption fetching must run from an IP YouTube classifies as residential —
@@ -17,8 +17,21 @@ import {
 
 export type PromptLocale = "en" | "zh";
 
+/**
+ * One transcript line with its playback timing. The frontend uses these to
+ * render clickable timestamps that seek the embedded YouTube player.
+ *
+ * Same shape is produced by the Whisper fallback so consumers don't need to
+ * branch on transcript source.
+ */
+export interface TranscriptSegment {
+  readonly text: string;
+  readonly start: number; // seconds from start of video
+  readonly duration: number; // seconds
+}
+
 export interface CaptionResult {
-  readonly transcript: string;
+  readonly segments: readonly TranscriptSegment[];
   readonly source: "auto_captions";
   readonly language: PromptLocale;
   // `null` not `""`: the distinction between "YouTube returned empty" and
@@ -69,7 +82,7 @@ export function isExpectedNoCaptions(err: unknown): boolean {
 // the only prompt template guaranteed to exist; the warning is so we can
 // audit miss rate and decide whether to add ja/ko/etc.
 export function pickLocale(
-  segments: readonly TranscriptSegment[],
+  segments: readonly YtTranscriptSegment[],
   videoId?: string
 ): PromptLocale {
   const lang = segments[0]?.lang ?? "";
@@ -122,8 +135,8 @@ export async function fetchCaptions(
     throw err;
   }
 
-  const { segments, videoDetails } = result;
-  if (!segments || segments.length === 0) {
+  const { segments: ytSegments, videoDetails } = result;
+  if (!ytSegments || ytSegments.length === 0) {
     // Library reported success but handed back no segments. Usually this
     // means the video genuinely has no captions, but a YouTube schema
     // shift ("segments array now lives under .tracks") could hit this
@@ -136,27 +149,31 @@ export async function fetchCaptions(
     return null;
   }
 
-  const transcript = segments
-    .map((s) => s.text)
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Keep only segments whose text contains visible characters. A track of
+  // pure-whitespace lines (music-cue videos) yields no useful transcript
+  // and should fall back to Whisper rather than persist an empty string
+  // through the pipeline.
+  const segments: TranscriptSegment[] = ytSegments
+    .filter((s) => s.text.trim().length > 0)
+    .map((s) => ({
+      text: s.text,
+      start: s.offset,
+      duration: s.duration,
+    }));
 
-  if (!transcript) {
-    // All segments were whitespace-only. Rare but real (music-cue
-    // videos). Log for the same reason as the empty-segments branch.
+  if (segments.length === 0) {
     console.warn("[captions] whitespace-only transcript, treating as no_captions", {
       errorId: "CAPTION_EMPTY_TRANSCRIPT",
       videoId,
-      segmentCount: segments.length,
+      segmentCount: ytSegments.length,
     });
     return null;
   }
 
   return {
-    transcript,
+    segments,
     source: "auto_captions",
-    language: pickLocale(segments, videoId),
+    language: pickLocale(ytSegments, videoId),
     title: videoDetails?.title ?? null,
     channelName: videoDetails?.author ?? null,
   };

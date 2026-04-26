@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { readFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join, basename } from "path";
+import type { TranscriptSegment } from "./captions.js";
 
 export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
   const args = [
@@ -16,8 +17,11 @@ export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
     "1",
     "--vad_filter",
     "True",
+    // JSON output preserves per-segment timing the frontend uses to render
+    // clickable timestamps. Plain-text output dropped the timing data on
+    // the floor before the frontend ever saw it.
     "--output_format",
-    "txt",
+    "json",
     "--output_dir",
     tmpdir(),
   ];
@@ -40,17 +44,74 @@ export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
 // yt-dlp path was fixed enough to actually reach this step.
 export const WHISPER_CLI = "whisper-ctranslate2";
 
+interface WhisperJsonSegment {
+  start: number;
+  end: number;
+  text: string;
+}
+
+interface WhisperJsonOutput {
+  segments: WhisperJsonSegment[];
+}
+
+/**
+ * Parse the JSON file written by `whisper-ctranslate2 --output_format json`
+ * into our segment shape. Drops empty segments (whisper sometimes emits a
+ * trailing `""` for end-of-audio silence) and trims surrounding whitespace
+ * the model occasionally leaves on segment text.
+ *
+ * Throws on schema mismatch — a silent fall-through to "no segments" would
+ * hide a faster-whisper-ctranslate2 upgrade that broke the JSON contract,
+ * billing GPU for transcripts the frontend then renders as a single 00:00
+ * legacy paragraph.
+ */
+export function parseWhisperJson(json: string): TranscriptSegment[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (err) {
+    throw new Error(
+      `whisper JSON parse failed: ${err instanceof Error ? err.message : err}`
+    );
+  }
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !Array.isArray((parsed as WhisperJsonOutput).segments)
+  ) {
+    throw new Error("whisper JSON missing `segments` array");
+  }
+  const raw = (parsed as WhisperJsonOutput).segments;
+  const out: TranscriptSegment[] = [];
+  for (const s of raw) {
+    if (
+      typeof s.start !== "number" ||
+      typeof s.end !== "number" ||
+      typeof s.text !== "string"
+    ) {
+      throw new Error("whisper JSON segment missing start/end/text");
+    }
+    const text = s.text.trim();
+    if (!text) continue;
+    out.push({ text, start: s.start, duration: s.end - s.start });
+  }
+  return out;
+}
+
 /**
  * Transcribe an audio file using the faster-whisper-backed CLI.
  * When `lang` is provided, whisper's auto-detect is bypassed and the
  * transcription is forced into the named language — used when the
  * orchestrator has a high-confidence signal (yt-dlp metadata) and wants
  * to avoid whisper misfiring on short/noisy audio.
+ *
+ * Returns timestamped segments — the frontend uses these to render
+ * clickable timestamps that seek the embedded YouTube player.
  */
 export async function transcribeAudio(
   audioPath: string,
   lang?: string
-): Promise<string> {
+): Promise<TranscriptSegment[]> {
   return new Promise((resolve, reject) => {
     const args = buildWhisperArgs(audioPath, lang);
 
@@ -64,21 +125,21 @@ export async function transcribeAudio(
           return;
         }
 
-        const txtPath = join(
+        const jsonPath = join(
           tmpdir(),
-          basename(audioPath).replace(/\.[^.]+$/, ".txt")
+          basename(audioPath).replace(/\.[^.]+$/, ".json")
         );
 
         try {
-          const transcript = await readFile(txtPath, "utf-8");
-          await unlink(txtPath).catch((unlinkErr) => {
+          const raw = await readFile(jsonPath, "utf-8");
+          await unlink(jsonPath).catch((unlinkErr) => {
             // Cleanup failure is non-fatal — the transcript is in-memory —
             // but a repeated EACCES/EBUSY is a leak signal worth surfacing.
             console.warn(
-              `[whisper] failed to unlink ${txtPath}: ${unlinkErr}`
+              `[whisper] failed to unlink ${jsonPath}: ${unlinkErr}`
             );
           });
-          resolve(transcript.trim());
+          resolve(parseWhisperJson(raw));
         } catch (readErr) {
           reject(new Error(`Failed to read transcript file: ${readErr}`));
         }

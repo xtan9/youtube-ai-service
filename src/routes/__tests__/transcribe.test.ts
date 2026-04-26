@@ -51,15 +51,24 @@ describe("POST /transcribe", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 200 with language='auto' when no lang provided (back-compat)", async () => {
-    // Pre-PR clients send `{youtube_url}` only and expect `language: "auto"`
-    // in the response. Preserve that exact shape.
-    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue("hello world");
+  it("returns 200 with segments + derived transcript and language='auto' when no lang (back-compat)", async () => {
+    // Wire response includes `segments` (canonical) and `transcript`
+    // (derived from segments). The transcript field is kept for one
+    // rollout window so a frontend that hasn't picked up segments yet
+    // still works.
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([
+      { text: "hello", start: 0, duration: 1 },
+      { text: "world", start: 1, duration: 1 },
+    ]);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
+      segments: [
+        { text: "hello", start: 0, duration: 1 },
+        { text: "world", start: 1, duration: 1 },
+      ],
       transcript: "hello world",
       language: "auto",
       source: "whisper",
@@ -72,7 +81,7 @@ describe("POST /transcribe", () => {
     // silently dropped and whisper would keep auto-detecting.
     const spy = vi
       .spyOn(whisperLib, "transcribeAudio")
-      .mockResolvedValue("bonjour");
+      .mockResolvedValue([{ text: "bonjour", start: 0, duration: 1 }]);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
       lang: "fr",
@@ -97,6 +106,47 @@ describe("POST /transcribe", () => {
     const body = await res.json();
     expect(body).toEqual({ error: "Transcription failed" });
     expect(JSON.stringify(body)).not.toContain("/opt/tmp");
+  });
+
+  it("normalizes whitespace in the derived transcript (matches pre-PR contract)", async () => {
+    // Mirror of the captions-route normalization test: the derived
+    // `transcript` field preserves the pre-PR `replace(/\s+/g, " ").trim()`
+    // normalization so an old frontend that hashed/length-gated the field
+    // sees the same byte sequence during the rollout window. Segments
+    // themselves stay verbatim — this is purely about the legacy alias.
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([
+      { text: "  hello\tworld  ", start: 0, duration: 1 },
+      { text: "\n\n  foo  ", start: 1, duration: 1 },
+    ]);
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    const body = (await res.json()) as { transcript: string };
+    expect(body.transcript).toBe("hello world foo");
+  });
+
+  it("returns 500 with WHISPER_EMPTY_RESULT when whisper produces zero usable segments", async () => {
+    // Symmetric of the captions path's CAPTION_EMPTY_TRANSCRIPT — silently
+    // shipping `transcript: ""` would let a VAD misconfig / yt-dlp
+    // encoding bug / model upgrade artifact land as a 200 success and
+    // produce a garbage LLM summary downstream. Surfacing as 500 routes
+    // it through the existing alert + skip-cache path.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([]);
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: "Transcription produced no content",
+    });
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining("WHISPER_EMPTY_RESULT"),
+      expect.objectContaining({
+        errorId: "WHISPER_EMPTY_RESULT",
+        videoId: "dQw4w9WgXcQ",
+      })
+    );
   });
 
   it("returns 500 with generic body when whisper fails (no internal leak)", async () => {

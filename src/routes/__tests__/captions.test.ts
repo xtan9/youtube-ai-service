@@ -61,9 +61,18 @@ describe("POST /captions", () => {
     expect(await res.json()).toEqual({ error: "no_captions" });
   });
 
-  it("returns 200 with the full caption result on success", async () => {
+  it("returns 200 with segments + a derived transcript string on success", async () => {
+    // Wire response includes both `segments` (canonical) and `transcript`
+    // (derived). The transcript field is kept for one rollout window so a
+    // frontend deployment that hasn't picked up segments yet still works;
+    // a follow-up cleanup PR drops it. Drift here would either break the
+    // old frontend (transcript missing) or stop carrying timing to the
+    // new frontend (segments missing).
     const mockResult = {
-      transcript: "hello world",
+      segments: [
+        { text: "hello", start: 0, duration: 1 },
+        { text: "world", start: 1, duration: 1 },
+      ],
       source: "auto_captions" as const,
       language: "en" as const,
       title: "test video",
@@ -74,7 +83,33 @@ describe("POST /captions", () => {
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual(mockResult);
+    expect(await res.json()).toEqual({
+      ...mockResult,
+      transcript: "hello world",
+    });
+  });
+
+  it("normalizes whitespace in the derived transcript (matches pre-PR contract)", async () => {
+    // The pre-PR captions path joined and then `.replace(/\s+/g, " ").trim()`-ed
+    // the transcript. An old frontend that hashed / length-gated the field
+    // would otherwise see a different value for the same video during the
+    // rollout window. The route preserves the legacy normalization on the
+    // derived string while keeping the segments themselves verbatim.
+    vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue({
+      segments: [
+        { text: "  hello\tworld  ", start: 0, duration: 1 },
+        { text: "\n\n  foo  ", start: 1, duration: 1 },
+      ],
+      source: "auto_captions" as const,
+      language: "en" as const,
+      title: "t",
+      channelName: "c",
+    });
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    const body = (await res.json()) as { transcript: string };
+    expect(body.transcript).toBe("hello world foo");
   });
 
   it("returns 500 with a generic message when fetchCaptions throws", async () => {
