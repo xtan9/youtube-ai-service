@@ -84,6 +84,7 @@ describe("fetchYtdlpMetadata", () => {
         title: "Test Video",
         description: "A test video",
         language: "fr",
+        duration: 213,
         subtitles: { fr: [{ url: "x", ext: "vtt" }] },
         automatic_captions: { en: [{ url: "y", ext: "vtt" }] },
       })
@@ -92,6 +93,7 @@ describe("fetchYtdlpMetadata", () => {
     expect(result.title).toBe("Test Video");
     expect(result.description).toBe("A test video");
     expect(result.language).toBe("fr");
+    expect(result.duration).toBe(213);
     expect(result.subtitles).toEqual({ fr: [{ url: "x", ext: "vtt" }] });
     expect(result.automatic_captions).toEqual({
       en: [{ url: "y", ext: "vtt" }],
@@ -108,8 +110,51 @@ describe("fetchYtdlpMetadata", () => {
     expect(result.title).toBe("Only Title");
     expect(result.description).toBe("");
     expect(result.language).toBeNull();
+    expect(result.duration).toBeNull();
     expect(result.subtitles).toEqual({});
     expect(result.automatic_captions).toEqual({});
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined (omitted)", undefined],
+    // Numeric string is the realistic regression vector — a future
+    // maintainer adding `Number(obj.duration)` "to be helpful" would
+    // accept "213" as 213, silently passing the too-long gate when a
+    // yt-dlp version drift starts emitting strings.
+    ["numeric string", "213"],
+    ["non-numeric string", "10:30"],
+    // Booleans and objects are the well-meaning-coercion footguns —
+    // `Number(true)` is 1, `Number({})` is NaN. The strict typeof
+    // check rejects both before any arithmetic touches them.
+    ["boolean true", true],
+    ["boolean false", false],
+    ["object", { seconds: 213 }],
+    ["array", [213]],
+    ["NaN", NaN],
+    ["Infinity", Infinity],
+    ["-Infinity", -Infinity],
+    ["negative", -5],
+  ])(
+    "collapses non-finite / non-numeric / negative duration (%s) to null",
+    async (_label, value) => {
+      // yt-dlp returns `null` on live streams and may emit non-numeric
+      // sentinels on schema regressions. Treating any of these as 0
+      // would silently pass any "video too long?" gate downstream and
+      // reintroduce the silent-hang bug — null forces the caller into
+      // "unknown, fall through" branch.
+      const payload: Record<string, unknown> = { id: "abc" };
+      if (value !== undefined) payload.duration = value;
+      mockExecSuccess(JSON.stringify(payload));
+      const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+      expect(result.duration).toBeNull();
+    }
+  );
+
+  it("preserves duration=0 (a valid edge — zero-second clips exist)", async () => {
+    mockExecSuccess(JSON.stringify({ id: "abc", duration: 0 }));
+    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    expect(result.duration).toBe(0);
   });
 
   it("throws when yt-dlp exits non-zero", async () => {

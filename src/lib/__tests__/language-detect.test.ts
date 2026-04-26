@@ -10,6 +10,7 @@ const base: YtdlpMetadata = {
   title: "",
   description: "",
   language: null,
+  duration: null,
   subtitles: {},
   automatic_captions: {},
 };

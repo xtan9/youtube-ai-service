@@ -50,6 +50,16 @@ metadata.post("/", async (c) => {
       language,
       title: ytdlpMeta.title,
       description: ytdlpMeta.description,
+      // Surface duration so callers can fail fast on videos too long
+      // for the no-captions Whisper fallback to finish inside their
+      // /transcribe budget — without this signal a caller has no
+      // pre-flight evidence and learns the video was too long only
+      // after the full timeout. `null` means yt-dlp gave us no usable
+      // value (live streams, schema gaps, or any non-finite/negative
+      // sentinel rejected by the normalizer); the contract is "treat
+      // null as unknown, never as 0" — coercing would silently pass
+      // any too-long gate.
+      duration: ytdlpMeta.duration,
       availableCaptions,
     });
   } catch (err) {

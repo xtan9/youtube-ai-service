@@ -98,11 +98,25 @@ function normalizeYtdlpJson(raw: unknown): YtdlpMetadata {
     typeof obj.language === "string" && obj.language.length > 0
       ? obj.language
       : null;
+  // yt-dlp emits `duration` as a number of seconds for VOD entries and
+  // omits it (or sets it to null) on live streams. Anything that isn't
+  // a finite non-negative number — string, boolean, NaN, Infinity,
+  // negative, missing — collapses to `null` so a yt-dlp regression
+  // that fills the field with a sentinel can't flow through and bias
+  // downstream length checks. Zero is preserved (zero-second clips
+  // exist and are a legitimate VOD case).
+  const duration =
+    typeof obj.duration === "number" &&
+    Number.isFinite(obj.duration) &&
+    obj.duration >= 0
+      ? obj.duration
+      : null;
 
   return {
     title,
     description,
     language,
+    duration,
     subtitles: normalizeCaptionDict(obj.subtitles),
     automatic_captions: normalizeCaptionDict(obj.automatic_captions),
   };
