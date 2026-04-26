@@ -422,6 +422,7 @@ describe("fetchCaptions", () => {
           videoId: "dQw4w9WgXcQ",
           requested: "zh",
           matched: "zh-Hans",
+          available: ["zh-Hans", "en"],
         })
       );
     });
@@ -557,6 +558,54 @@ describe("fetchCaptions", () => {
       ).rejects.toBeInstanceOf(TypeError);
 
       expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
+    });
+
+    it("picks the first matching variant in availableLangs order (preserves YouTube's track order)", async () => {
+      // YouTube returns availableLangs in track order. The retry must
+      // preserve that — a 'sort' or 'prefer simplified' refactor would
+      // silently change which variant resolves and which transcript gets
+      // cached. zh-Hant-TW comes before zh-Hans here even though zh-Hans
+      // would be the more "natural" Mandarin pick.
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "zh",
+            ["zh-Hant-TW", "zh-Hans"],
+            "dQw4w9WgXcQ"
+          )
+        )
+        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hant-TW" }]));
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "zh");
+
+      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
+        videoDetails: true,
+        lang: "zh-Hant-TW",
+      });
+    });
+
+    it("returns null without retry when availableLangs is empty", async () => {
+      // Defensive: the library could theoretically throw NotAvailableLanguage
+      // with an empty availableLangs array (e.g. a future schema where the
+      // language-mismatch class fires before track discovery completes).
+      // findSubtagMatch returns null for empty input, so we should fall
+      // through to "no captions" without crashing or retrying.
+      mockedFetchTranscript.mockRejectedValueOnce(
+        new YoutubeTranscriptNotAvailableLanguageError(
+          "zh",
+          [],
+          "dQw4w9WgXcQ"
+        )
+      );
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        "zh"
+      );
+
+      expect(result).toBeNull();
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
     });
   });
 });

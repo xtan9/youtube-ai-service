@@ -213,6 +213,7 @@ export async function fetchCaptions(
         videoId,
         requested: lang,
         matched,
+        available: err.availableLangs,
       });
       try {
         const retryResponse = await fetchTranscript(videoId, {
