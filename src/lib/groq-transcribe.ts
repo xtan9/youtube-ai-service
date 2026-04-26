@@ -1,3 +1,4 @@
+import { readFile } from "fs/promises";
 import { z } from "zod";
 import type { TranscriptSegment } from "./captions.js";
 
@@ -34,12 +35,108 @@ export class GroqTranscribeError extends Error {
   }
 }
 
-// Public function signature stub — implemented in Task 3. Declared here
-// so the type can be imported by the route in later tasks even before
-// the body lands. Throws at runtime if accidentally called pre-impl.
+const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
+const DEFAULT_MODEL = "whisper-large-v3-turbo";
+const DEFAULT_TIMEOUT_MS = 120_000;
+const RETRY_BACKOFF_MS = 2_000;
+
 export async function transcribeViaGroq(
-  _audioPath: string,
-  _lang?: string
+  audioPath: string,
+  lang?: string
 ): Promise<{ segments: TranscriptSegment[]; language: string }> {
-  throw new Error("transcribeViaGroq not implemented yet");
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) {
+    // Defensive: the route is supposed to check this before calling us.
+    // A thrown Error (not GroqTranscribeError) signals "programmer error,
+    // not operational failure" so the route's discriminating catch will
+    // re-throw rather than fall back.
+    throw new Error("GROQ_API_KEY not set (call site should have checked)");
+  }
+
+  const model = process.env.GROQ_MODEL || DEFAULT_MODEL;
+  const timeoutMs = Number(process.env.GROQ_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
+
+  const fileBytes = await readFile(audioPath);
+  const buildBody = () => {
+    const body = new FormData();
+    body.append(
+      "file",
+      new Blob([fileBytes], { type: "audio/mpeg" }),
+      audioPath.split("/").pop() ?? "audio.mp3"
+    );
+    body.append("model", model);
+    body.append("response_format", "verbose_json");
+    if (lang) body.append("language", lang);
+    return body;
+  };
+
+  const doFetch = () =>
+    fetch(GROQ_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: buildBody(),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+  let resp: Response;
+  try {
+    resp = await doFetch();
+    // Single retry on 429. Free-tier rate limits are per-minute, so a
+    // brief backoff usually clears. We deliberately do NOT retry 5xx —
+    // Groq's incidents tend to last longer than 2s and we want to fail
+    // through to the local fallback quickly.
+    if (resp.status === 429) {
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+      resp = await doFetch();
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new GroqTranscribeError("timeout");
+    }
+    throw new GroqTranscribeError(
+      "network",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+
+  if (!resp.ok) {
+    // `.text().catch(() => "")` mirrors the existing vps-client.ts safety
+    // pattern — a body-read failure must not swallow the original status.
+    const text = await resp.text().catch(() => "");
+    throw new GroqTranscribeError(resp.status, text);
+  }
+
+  let raw: unknown;
+  try {
+    raw = await resp.json();
+  } catch (err) {
+    throw new GroqTranscribeError(
+      "schema",
+      `JSON parse: ${err instanceof Error ? err.message : err}`
+    );
+  }
+
+  const parsed = GroqResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new GroqTranscribeError("schema", parsed.error.message);
+  }
+
+  // Drop empty / whitespace-only segments (Groq occasionally emits a
+  // trailing empty-text segment for end-of-audio silence — same defensive
+  // behavior parseWhisperJson already applies).
+  const segments: TranscriptSegment[] = [];
+  for (const s of parsed.data.segments) {
+    const text = s.text.trim();
+    if (!text) continue;
+    segments.push({
+      text,
+      start: s.start,
+      duration: Math.max(0, s.end - s.start),
+    });
+  }
+  if (segments.length === 0) {
+    throw new GroqTranscribeError("schema", "empty segments");
+  }
+
+  return { segments, language: parsed.data.language ?? lang ?? "auto" };
 }
