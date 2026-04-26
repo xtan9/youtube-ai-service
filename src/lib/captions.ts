@@ -42,6 +42,45 @@ export interface CaptionResult {
   readonly channelName: string | null;
 }
 
+// `youtube-transcript-plus` already decodes the named XML entities
+// (`&amp; &lt; &gt; &quot; &apos; &#39;`) once, but YouTube sometimes
+// emits them double-encoded (`&amp;#39;` survives the first pass as
+// `&#39;`) and the library doesn't cover hex-numeric (`&#x27;`) or
+// arbitrary `&#NNN;` decimal entities at all. Run an iterative pass
+// here so the segment text we hand callers is a clean Unicode string —
+// otherwise React renders the literal `&` and users see "I&#39;m"
+// where they should see "I'm".
+//
+// Bounded to two passes total: enough to unwrap `&amp;<entity>;`
+// without risk of an infinite loop on adversarial input that happens
+// to keep producing entity-shaped substrings. Whisper output is plain
+// text so this only matters on the captions path.
+const NAMED_XML_ENTITIES: Readonly<Record<string, string>> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&apos;": "'",
+  "&nbsp;": " ",
+};
+
+function decodeEntitiesOnce(text: string): string {
+  return text
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (m) => NAMED_XML_ENTITIES[m] ?? m)
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
+      String.fromCodePoint(parseInt(hex, 16))
+    )
+    .replace(/&#(\d+);/g, (_, dec) =>
+      String.fromCodePoint(parseInt(dec, 10))
+    );
+}
+
+export function decodeCaptionEntities(text: string): string {
+  const once = decodeEntitiesOnce(text);
+  if (once === text) return once;
+  return decodeEntitiesOnce(once);
+}
+
 // 11-char YouTube video IDs. Covers watch, youtu.be shortlink, Shorts,
 // and embed forms. Hostless so m.youtube.com / music.youtube.com flow
 // through the same patterns.
@@ -156,7 +195,7 @@ export async function fetchCaptions(
   const segments: TranscriptSegment[] = ytSegments
     .filter((s) => s.text.trim().length > 0)
     .map((s) => ({
-      text: s.text,
+      text: decodeCaptionEntities(s.text),
       start: s.offset,
       duration: s.duration,
     }));
