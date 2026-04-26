@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  decodeCaptionEntities,
   extractVideoId,
   fetchCaptions,
   isExpectedNoCaptions,
@@ -116,6 +117,74 @@ describe("pickLocale", () => {
 
   it("falls back to en when segments array is empty", () => {
     expect(pickLocale([])).toBe("en");
+  });
+});
+
+describe("decodeCaptionEntities", () => {
+  it("decodes the named XML entities the library already handles once", () => {
+    expect(decodeCaptionEntities("Tom &amp; Jerry")).toBe("Tom & Jerry");
+    expect(decodeCaptionEntities("&lt;tag&gt;")).toBe("<tag>");
+    expect(decodeCaptionEntities("&quot;hi&quot;")).toBe('"hi"');
+    expect(decodeCaptionEntities("don&apos;t")).toBe("don't");
+  });
+
+  it("decodes the apostrophe variants the library covers and the ones it doesn't", () => {
+    expect(decodeCaptionEntities("I&#39;m here")).toBe("I'm here");
+    // The library's named-decode regex skips hex (&#x27;) — covered here.
+    expect(decodeCaptionEntities("can&#x27;t")).toBe("can't");
+    // Generic decimal numeric entities (e.g. em-dash &#8212;) — also not
+    // in the library's list.
+    expect(decodeCaptionEntities("hi &#8212; there")).toBe("hi — there");
+  });
+
+  it("unwraps double-encoded entities (the bug the user reported)", () => {
+    // YouTube sometimes emits `&amp;#39;`. After the library's single
+    // decode pass, `&amp;` -> `&`, leaving `&#39;`. The second pass here
+    // takes that to `'`. Without it, `I&#39;m` reaches the UI verbatim
+    // and React renders it as literal "I&#39;m".
+    expect(decodeCaptionEntities("I&amp;#39;m here")).toBe("I'm here");
+    expect(decodeCaptionEntities("&amp;amp;")).toBe("&");
+  });
+
+  it("is a no-op for plain text and Unicode that contains an ampersand", () => {
+    expect(decodeCaptionEntities("plain text")).toBe("plain text");
+    // Bare ampersand without entity shape stays intact (e.g. brand names
+    // like "AT&T" mid-transcript).
+    expect(decodeCaptionEntities("AT&T")).toBe("AT&T");
+    // Non-ASCII passes through.
+    expect(decodeCaptionEntities("café — naïve")).toBe("café — naïve");
+  });
+
+  it("handles supplementary-plane codepoints (emoji, > 0xFFFF)", () => {
+    // U+1F600 GRINNING FACE = 128512
+    expect(decodeCaptionEntities("hi &#128512;!")).toBe("hi 😀!");
+    expect(decodeCaptionEntities("&#x1F600;")).toBe("😀");
+  });
+
+  it("does not throw on out-of-range numeric entities (returns original)", () => {
+    // > 0x10FFFF: String.fromCodePoint would throw RangeError. The
+    // decoder must return the raw entity unchanged so a single
+    // malformed entity can't 500 an entire captions fetch.
+    expect(() => decodeCaptionEntities("bad &#999999999999;")).not.toThrow();
+    expect(decodeCaptionEntities("bad &#999999999999;")).toBe(
+      "bad &#999999999999;"
+    );
+    expect(decodeCaptionEntities("bad &#xFFFFFFFF;")).toBe("bad &#xFFFFFFFF;");
+  });
+
+  it("preserves malformed entity-like substrings unchanged", () => {
+    // Missing semicolon, missing digits, named-but-unknown — all should
+    // pass through as-is rather than partial-match into garbage.
+    expect(decodeCaptionEntities("a &amp b")).toBe("a &amp b"); // no `;`
+    expect(decodeCaptionEntities("a &; b")).toBe("a &; b");
+    expect(decodeCaptionEntities("a &#; b")).toBe("a &#; b");
+    expect(decodeCaptionEntities("a &foo; b")).toBe("a &foo; b");
+  });
+
+  it("handles mixed entities in one string", () => {
+    expect(
+      decodeCaptionEntities("Tom &amp; &#39;Jerry&#39; &#x2014; fin")
+    ).toBe("Tom & 'Jerry' — fin");
   });
 });
 

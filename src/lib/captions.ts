@@ -42,6 +42,62 @@ export interface CaptionResult {
   readonly channelName: string | null;
 }
 
+// `youtube-transcript-plus` already decodes the named XML entities
+// (`&amp; &lt; &gt; &quot; &apos; &#39;`) once, but YouTube sometimes
+// emits them double-encoded (`&amp;#39;` survives the first pass as
+// `&#39;`) and the library doesn't cover hex-numeric (`&#x27;`) or
+// arbitrary `&#NNN;` decimal entities at all. Run an iterative pass
+// here so the segment text we hand callers is a clean Unicode string —
+// otherwise React renders the literal `&` and users see "I&#39;m"
+// where they should see "I'm".
+//
+// Bounded to two passes total: enough to unwrap `&amp;<entity>;`
+// without risk of an infinite loop on adversarial input that happens
+// to keep producing entity-shaped substrings. Whisper output is plain
+// text so this only matters on the captions path.
+const NAMED_XML_ENTITIES: Readonly<Record<string, string>> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&apos;": "'",
+  "&nbsp;": " ",
+};
+
+// `String.fromCodePoint` throws RangeError for values > 0x10FFFF (e.g.
+// adversarial `&#999999999999;`). A defensive decoder must never throw —
+// a single malformed entity would otherwise crash the whole captions
+// fetch. Return the original match unchanged when the codepoint is out
+// of range so downstream sees the raw entity instead of a 500.
+const MAX_UNICODE_CODEPOINT = 0x10ffff;
+function safeFromCodePoint(cp: number, originalMatch: string): string {
+  if (!Number.isFinite(cp) || cp < 0 || cp > MAX_UNICODE_CODEPOINT) {
+    return originalMatch;
+  }
+  try {
+    return String.fromCodePoint(cp);
+  } catch {
+    return originalMatch;
+  }
+}
+
+function decodeEntitiesOnce(text: string): string {
+  return text
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (m) => NAMED_XML_ENTITIES[m] ?? m)
+    .replace(/&#x([0-9a-fA-F]+);/g, (m, hex) =>
+      safeFromCodePoint(parseInt(hex, 16), m)
+    )
+    .replace(/&#(\d+);/g, (m, dec) =>
+      safeFromCodePoint(parseInt(dec, 10), m)
+    );
+}
+
+export function decodeCaptionEntities(text: string): string {
+  const once = decodeEntitiesOnce(text);
+  if (once === text) return once;
+  return decodeEntitiesOnce(once);
+}
+
 // 11-char YouTube video IDs. Covers watch, youtu.be shortlink, Shorts,
 // and embed forms. Hostless so m.youtube.com / music.youtube.com flow
 // through the same patterns.
@@ -156,7 +212,7 @@ export async function fetchCaptions(
   const segments: TranscriptSegment[] = ytSegments
     .filter((s) => s.text.trim().length > 0)
     .map((s) => ({
-      text: s.text,
+      text: decodeCaptionEntities(s.text),
       start: s.offset,
       duration: s.duration,
     }));
