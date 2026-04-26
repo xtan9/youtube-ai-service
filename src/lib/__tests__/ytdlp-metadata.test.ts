@@ -84,6 +84,7 @@ describe("fetchYtdlpMetadata", () => {
         title: "Test Video",
         description: "A test video",
         language: "fr",
+        duration: 213,
         subtitles: { fr: [{ url: "x", ext: "vtt" }] },
         automatic_captions: { en: [{ url: "y", ext: "vtt" }] },
       })
@@ -92,6 +93,7 @@ describe("fetchYtdlpMetadata", () => {
     expect(result.title).toBe("Test Video");
     expect(result.description).toBe("A test video");
     expect(result.language).toBe("fr");
+    expect(result.duration).toBe(213);
     expect(result.subtitles).toEqual({ fr: [{ url: "x", ext: "vtt" }] });
     expect(result.automatic_captions).toEqual({
       en: [{ url: "y", ext: "vtt" }],
@@ -108,8 +110,39 @@ describe("fetchYtdlpMetadata", () => {
     expect(result.title).toBe("Only Title");
     expect(result.description).toBe("");
     expect(result.language).toBeNull();
+    expect(result.duration).toBeNull();
     expect(result.subtitles).toEqual({});
     expect(result.automatic_captions).toEqual({});
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined (omitted)", undefined],
+    ["string", "10:30"],
+    ["NaN", NaN],
+    ["Infinity", Infinity],
+    ["-Infinity", -Infinity],
+    ["negative", -5],
+  ])(
+    "collapses non-finite / non-numeric / negative duration (%s) to null",
+    async (_label, value) => {
+      // yt-dlp returns `null` on live streams and may emit non-numeric
+      // sentinels on schema regressions. Treating any of these as 0
+      // would silently pass any "video too long?" gate downstream and
+      // reintroduce the silent-hang bug — null forces the caller into
+      // "unknown, fall through" branch.
+      const payload: Record<string, unknown> = { id: "abc" };
+      if (value !== undefined) payload.duration = value;
+      mockExecSuccess(JSON.stringify(payload));
+      const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+      expect(result.duration).toBeNull();
+    }
+  );
+
+  it("preserves duration=0 (a valid edge — zero-second clips exist)", async () => {
+    mockExecSuccess(JSON.stringify({ id: "abc", duration: 0 }));
+    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    expect(result.duration).toBe(0);
   });
 
   it("throws when yt-dlp exits non-zero", async () => {

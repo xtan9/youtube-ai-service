@@ -50,6 +50,14 @@ metadata.post("/", async (c) => {
       language,
       title: ytdlpMeta.title,
       description: ytdlpMeta.description,
+      // Surface duration so the frontend can fail fast on videos too
+      // long for the no-captions Whisper fallback to finish inside
+      // VPS_TIMEOUT_MS — without this signal the route silently hangs
+      // for the full timeout before returning a generic error.
+      // `null` when yt-dlp didn't supply a usable value (live streams
+      // and rare schema gaps); the frontend treats null as "unknown"
+      // and falls through to the legacy attempt.
+      duration: ytdlpMeta.duration,
       availableCaptions,
     });
   } catch (err) {

@@ -43,11 +43,12 @@ describe("POST /metadata", () => {
     expect(res.status).toBe(400);
   });
 
-  it("returns 200 with language, title, description, availableCaptions on happy path", async () => {
+  it("returns 200 with language, title, description, duration, availableCaptions on happy path", async () => {
     vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
       title: "Comment apprendre",
       description: "Une vidéo en français",
       language: "fr",
+      duration: 893,
       subtitles: {},
       automatic_captions: { fr: [{ url: "x", ext: "vtt" }], en: [{ url: "x", ext: "vtt" }] },
     });
@@ -59,7 +60,28 @@ describe("POST /metadata", () => {
     expect(body.language).toBe("fr");
     expect(body.title).toBe("Comment apprendre");
     expect(body.description).toBe("Une vidéo en français");
+    expect(body.duration).toBe(893);
     expect(body.availableCaptions).toEqual(expect.arrayContaining(["fr", "en"]));
+  });
+
+  it("forwards duration=null (live streams) without coercing to 0", async () => {
+    // The frontend treats null as "duration unknown, fall through" — coercing
+    // to 0 here would silently pass any "video too long?" gate downstream
+    // and reintroduce the silent-hang bug for live streams.
+    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
+      title: "Live",
+      description: "",
+      language: "en",
+      duration: null,
+      subtitles: {},
+      automatic_captions: {},
+    });
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.duration).toBeNull();
   });
 
   it("returns 500 with a generic message when yt-dlp throws", async () => {
