@@ -334,6 +334,132 @@ describe("POST /transcribe — Groq orchestration", () => {
     }
   );
 
+  it("returns 503 when Groq raises compress: missing-binary, regardless of audio length — no local fallback for deploy regression", async () => {
+    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
+      new GroqTranscribeError(
+        "compress",
+        "missing-binary: ffmpeg ENOENT",
+        "missing-binary"
+      )
+    );
+    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
+    const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+
+    expect(res.status).toBe(503);
+    expect(localSpy).not.toHaveBeenCalled();
+    const body = await res.json();
+    expect(body.error).toMatch(/temporarily unavailable/i);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("GROQ_FAILED_NO_FALLBACK"),
+      expect.objectContaining({
+        errorId: "GROQ_FAILED_NO_FALLBACK",
+        audioSeconds: 60,
+        fallbackCap: 180,
+        groqStatus: "compress",
+        compressKind: "missing-binary",
+      })
+    );
+    expect(ytdlpLib.cleanupAudio).toHaveBeenCalledWith("/tmp/fake.mp3");
+  });
+
+  it("returns 503 when Groq raises compress: timeout, regardless of audio length — no local fallback for ffmpeg timeout (host saturation)", async () => {
+    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
+      new GroqTranscribeError(
+        "compress",
+        "timeout: ffmpeg killed by 120000ms timeout",
+        "timeout"
+      )
+    );
+    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
+    const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+
+    expect(res.status).toBe(503);
+    expect(localSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("GROQ_FAILED_NO_FALLBACK"),
+      expect.objectContaining({
+        errorId: "GROQ_FAILED_NO_FALLBACK",
+        audioSeconds: 60,
+        fallbackCap: 180,
+        groqStatus: "compress",
+        compressKind: "timeout",
+      })
+    );
+  });
+
+  it("falls back to local Whisper when Groq raises compress: ffmpeg-failed (bad input) and audio <= cap", async () => {
+    // compress: ffmpeg-failed is bad input, NOT an operational signal.
+    // Local Whisper may handle the audio differently — fallback is the
+    // right call and this test pins that contract so the fatal-upstream
+    // discriminator stays narrow.
+    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
+      new GroqTranscribeError(
+        "compress",
+        "ffmpeg-failed: invalid audio frame",
+        "ffmpeg-failed"
+      )
+    );
+    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
+    const localSpy = vi
+      .spyOn(whisperLib, "transcribeAudio")
+      .mockResolvedValue([{ text: "local segment", start: 0, duration: 1 }]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+
+    expect(res.status).toBe(200);
+    expect(localSpy).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("GROQ_FALLBACK"),
+      expect.objectContaining({
+        errorId: "GROQ_FALLBACK",
+        groqStatus: "compress",
+        compressKind: "ffmpeg-failed",
+      })
+    );
+  });
+
+  it("returns 503 on compress error with missing compressKind (fail-closed default)", async () => {
+    // A future throw that omits compressKind must NOT silently fall back.
+    // The fail-closed default in the route discriminator handles the
+    // case where the error class allows undefined compressKind for
+    // back-compat.
+    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
+      new GroqTranscribeError("compress", "some-detail-missing-kind")
+      // Note: no third arg — compressKind is undefined.
+    );
+    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
+    const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+
+    expect(res.status).toBe(503);
+    expect(localSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("GROQ_FAILED_NO_FALLBACK"),
+      expect.objectContaining({
+        errorId: "GROQ_FAILED_NO_FALLBACK",
+        groqStatus: "compress",
+        compressKind: undefined,
+      })
+    );
+  });
+
   it("returns 503 when Groq fails and audio > fallback cap (no local attempt)", async () => {
     vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
       new GroqTranscribeError("network", "ECONNRESET")

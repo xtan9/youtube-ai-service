@@ -287,6 +287,29 @@ describe("transcribeViaGroq", () => {
     expect(mockedCleanup).not.toHaveBeenCalled();
   });
 
+  it("exposes the AudioCompressError kind as a typed compressKind on GroqTranscribeError (so route discriminator doesn't depend on bodyExcerpt prefix)", async () => {
+    // Belt-and-suspenders pin on the throw-site contract: the route's
+    // fatal-upstream discriminator now reads err.compressKind instead
+    // of prefix-matching err.bodyExcerpt, so a future drift here (kind
+    // not propagated, or wrong kind propagated) would silently
+    // re-classify production failures from no-fallback to fallback.
+    // This test fails immediately on that drift.
+    mockedCompress.mockRejectedValueOnce(
+      new audioCompress.AudioCompressError(
+        "missing-binary",
+        "spawn ffmpeg ENOENT"
+      )
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const err = await transcribeViaGroq("/tmp/clip.mp3").catch((e) => e);
+    expect(err).toBeInstanceOf(GroqTranscribeError);
+    expect(err.status).toBe("compress");
+    expect(err.compressKind).toBe("missing-binary");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("coerces a segment whose start > end to duration=0 (defensive)", async () => {
     // Groq's contract guarantees start ≤ end, but the impl applies
     // Math.max(0, end - start) defensively. Without this test, a future

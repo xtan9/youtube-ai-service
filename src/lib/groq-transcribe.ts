@@ -5,6 +5,7 @@ import {
   cleanupCompressed,
   compressForGroq,
 } from "./audio-compress.js";
+import type { AudioCompressKind } from "./audio-compress.js";
 import type { TranscriptSegment } from "./captions.js";
 
 // Subset of Groq's `verbose_json` response we consume. Groq's full shape
@@ -34,7 +35,8 @@ export class GroqTranscribeError extends Error {
       | "timeout"
       | "schema"
       | "compress",
-    public readonly bodyExcerpt?: string
+    public readonly bodyExcerpt?: string,
+    public readonly compressKind?: AudioCompressKind
   ) {
     super(
       `Groq transcription failed (${status})${
@@ -91,7 +93,8 @@ export async function transcribeViaGroq(
       // "ffmpeg-failed" (bad input) from "timeout" (host saturation).
       throw new GroqTranscribeError(
         "compress",
-        `${err.kind}: ${err.detail}`
+        `${err.kind}: ${err.detail}`,
+        err.kind
       );
     }
     throw err;
