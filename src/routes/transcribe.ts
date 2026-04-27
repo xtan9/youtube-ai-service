@@ -91,19 +91,31 @@ transcribe.post("/", async (c) => {
         const audioSeconds = await probeAudioDurationSeconds(audioPath);
         const fallbackCap =
           Number(process.env.GROQ_LOCAL_FALLBACK_MAX_SECONDS) || 180;
-        // Quota exhaustion is the one Groq failure we deliberately surface as
-        // an error rather than mask with local Whisper. groq-transcribe.ts
-        // already retries 429 once with a 2 s backoff, so reaching this branch
-        // means Groq's quota is genuinely out — silent degradation here would
-        // hide the operational signal and turn a "transcription unavailable"
-        // event into "the site got slow today."
+        // Fatal upstream failures we deliberately surface as errors rather
+        // than mask with local Whisper:
+        //   - 429: Groq quota exhausted (in-process retry already absorbed
+        //     transient blips, so reaching here means quota is genuinely out).
+        //   - compress: missing-binary: ffmpeg not on PATH inside the
+        //     container — a deploy regression, not a transient or input-shaped
+        //     failure.
+        //   - compress: timeout: ffmpeg killed at the 120s compress timeout —
+        //     host saturation, and local Whisper runs on the same host so
+        //     falling back makes the saturation worse.
+        // compress: ffmpeg-failed (bad input) is intentionally fallback-eligible
+        // — local Whisper may handle the audio differently and the user still
+        // gets a result.
         const isRateLimited = err.status === 429;
+        const isOperationalCompressFailure =
+          err.status === "compress" &&
+          (err.bodyExcerpt?.startsWith("missing-binary:") === true ||
+            err.bodyExcerpt?.startsWith("timeout:") === true);
+        const isFatalUpstream = isRateLimited || isOperationalCompressFailure;
         // audioSeconds === null means ffprobe failed; fail closed (treat
         // as "too long for fallback") so a noisy probe doesn't promote
         // a routine Groq blip into a multi-minute local-Whisper attempt
         // for a video we can't bound.
         const eligibleForFallback =
-          !isRateLimited &&
+          !isFatalUpstream &&
           audioSeconds !== null &&
           audioSeconds <= fallbackCap;
 
