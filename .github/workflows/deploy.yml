@@ -50,11 +50,12 @@ jobs:
           # a code change.
           TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
           TS_EXIT_NODE_HOSTNAME: ${{ secrets.TS_EXIT_NODE_HOSTNAME }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: root
           key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: DEPLOY_SHA,TS_AUTHKEY,TS_EXIT_NODE_HOSTNAME
+          envs: DEPLOY_SHA,TS_AUTHKEY,TS_EXIT_NODE_HOSTNAME,GROQ_API_KEY
           script: |
             set -euo pipefail
             cd /opt/youtube-ai-service
@@ -63,7 +64,10 @@ jobs:
             # Refresh the Tailscale-related entries in .env without clobbering
             # unrelated settings (VPS_API_KEY, etc.). awk rewrites the matching
             # keys in-place and appends them if absent.
-            ./scripts/update-env.sh TS_AUTHKEY="$TS_AUTHKEY" TS_EXIT_NODE_HOSTNAME="$TS_EXIT_NODE_HOSTNAME"
+            ./scripts/update-env.sh \
+              TS_AUTHKEY="$TS_AUTHKEY" \
+              TS_EXIT_NODE_HOSTNAME="$TS_EXIT_NODE_HOSTNAME" \
+              GROQ_API_KEY="$GROQ_API_KEY"
             ./scripts/deploy.sh
 
       # `workflow_run`-triggered failures don't surface on the PR/commit

@@ -3,8 +3,20 @@ import { z } from "zod";
 import { downloadAudio, cleanupAudio } from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import { extractVideoId } from "../lib/captions.js";
+import type { TranscriptSegment } from "../lib/captions.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { probeAudioDurationSeconds } from "../lib/audio-duration.js";
+import {
+  GroqTranscribeError,
+  transcribeViaGroq,
+} from "../lib/groq-transcribe.js";
+
+// Module-scoped so the GROQ_API_KEY_MISSING warning fires once per
+// process rather than once per request. Logs flooding stderr don't
+// escalate to ops any faster than a single line, and they make
+// real diagnostics harder to find.
+let groqKeyMissingWarned = false;
 
 const transcribe = new Hono();
 
@@ -55,7 +67,69 @@ transcribe.post("/", async (c) => {
     audioPath = await downloadAudio(youtube_url);
     console.log(`Audio downloaded to: ${audioPath}`);
 
-    const segments = await transcribeAudio(audioPath, lang);
+    const hasGroqKey = Boolean(process.env.GROQ_API_KEY?.trim());
+
+    let segments: TranscriptSegment[];
+
+    if (!hasGroqKey) {
+      if (!groqKeyMissingWarned) {
+        groqKeyMissingWarned = true;
+        console.error(
+          "[transcribe] GROQ_API_KEY_MISSING — falling back to local Whisper at any audio length until the secret is set",
+          { errorId: "GROQ_API_KEY_MISSING" }
+        );
+      }
+      segments = await transcribeAudio(audioPath, lang);
+    } else {
+      try {
+        segments = (await transcribeViaGroq(audioPath, lang)).segments;
+      } catch (err) {
+        if (!(err instanceof GroqTranscribeError)) throw err;
+
+        // Probe duration only on the fallback path — the happy path
+        // (Groq succeeds) shouldn't pay the extra ffprobe cost.
+        const audioSeconds = await probeAudioDurationSeconds(audioPath);
+        const fallbackCap =
+          Number(process.env.GROQ_LOCAL_FALLBACK_MAX_SECONDS) || 180;
+        // audioSeconds === null means ffprobe failed; fail closed (treat
+        // as "too long for fallback") so a noisy probe doesn't promote
+        // a routine Groq blip into a multi-minute local-Whisper attempt
+        // for a video we can't bound.
+        const eligibleForFallback =
+          audioSeconds !== null && audioSeconds <= fallbackCap;
+
+        if (eligibleForFallback) {
+          console.warn(
+            `[transcribe] GROQ_FALLBACK for video ${videoId}`,
+            {
+              errorId: "GROQ_FALLBACK",
+              videoId,
+              audioSeconds,
+              groqStatus: err.status,
+            }
+          );
+          segments = await transcribeAudio(audioPath, lang);
+        } else {
+          console.error(
+            `[transcribe] GROQ_FAILED_NO_FALLBACK for video ${videoId}`,
+            {
+              errorId: "GROQ_FAILED_NO_FALLBACK",
+              videoId,
+              audioSeconds,
+              fallbackCap,
+              groqStatus: err.status,
+            }
+          );
+          return c.json(
+            {
+              error:
+                "Transcription service is temporarily unavailable. Please try again in a few minutes.",
+            },
+            503
+          );
+        }
+      }
+    }
     console.log(`Transcription complete: ${segments.length} segments`);
 
     // Empty whisper output is the symmetric twin of the captions path's
@@ -95,12 +169,18 @@ transcribe.post("/", async (c) => {
       source: "whisper" as const,
     });
   } catch (err) {
-    // Real err.message (which embeds yt-dlp / whisper-ctranslate2 stderr
-    // — tmp paths, binary names, verbose extractor output) stays in the
-    // server log. Client sees a generic string so child-process internals
-    // aren't echoed to the browser.
     const message = err instanceof Error ? err.message : "Transcription failed";
-    console.error(`Transcription error for video ${videoId}: ${message}`);
+    console.error(
+      `[transcribe] TRANSCRIBE_UNHANDLED for video ${videoId}`,
+      {
+        errorId: "TRANSCRIBE_UNHANDLED",
+        videoId,
+        errorName: err instanceof Error ? err.name : "unknown",
+        // `message` carries yt-dlp / whisper / Groq-internal stderr —
+        // stays in the log, never in the user-visible body.
+        message: message.slice(0, 500),
+      }
+    );
     return c.json({ error: "Transcription failed" }, 500);
   } finally {
     if (audioPath) {

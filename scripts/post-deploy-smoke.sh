@@ -45,6 +45,17 @@ if ! docker exec youtube-ai-service whisper-ctranslate2 --version >/dev/null 2>&
 fi
 echo "[smoke] OK: whisper-ctranslate2 reachable"
 
+echo "[smoke] GROQ_API_KEY: verifying the secret reached the container env"
+# A missing secret means the route falls through to local Whisper at any
+# length — works for short clips but defeats the purpose of the Groq
+# rollout. Loud failure here so a forgotten GitHub-secret rotation can't
+# silently degrade prod to slow CPU transcription.
+if ! docker exec youtube-ai-service sh -c '[ -n "$GROQ_API_KEY" ]'; then
+  echo "[smoke] FAIL: GROQ_API_KEY not populated in youtube-ai-service container env"
+  exit 1
+fi
+echo "[smoke] OK: GROQ_API_KEY present"
+
 echo "[smoke] pot-provider: verifying HTTP listener is reachable from the app container"
 if ! docker exec youtube-ai-service node -e "require('http').get('http://127.0.0.1:4416/ping', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"; then
   echo "[smoke] FAIL: pot-provider /ping not reachable from app container"
