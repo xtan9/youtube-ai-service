@@ -336,7 +336,11 @@ describe("POST /transcribe — Groq orchestration", () => {
 
   it("returns 503 when Groq raises compress: missing-binary, regardless of audio length — no local fallback for deploy regression", async () => {
     vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
-      new GroqTranscribeError("compress", "missing-binary: ffmpeg ENOENT")
+      new GroqTranscribeError(
+        "compress",
+        "missing-binary: ffmpeg ENOENT",
+        "missing-binary"
+      )
     );
     vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
     const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
@@ -364,7 +368,11 @@ describe("POST /transcribe — Groq orchestration", () => {
 
   it("returns 503 when Groq raises compress: timeout, regardless of audio length — no local fallback for ffmpeg timeout (host saturation)", async () => {
     vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
-      new GroqTranscribeError("compress", "timeout: ffmpeg killed by 120000ms timeout")
+      new GroqTranscribeError(
+        "compress",
+        "timeout: ffmpeg killed by 120000ms timeout",
+        "timeout"
+      )
     );
     vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
     const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
@@ -393,7 +401,11 @@ describe("POST /transcribe — Groq orchestration", () => {
     // right call and this test pins that contract so the fatal-upstream
     // discriminator stays narrow.
     vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
-      new GroqTranscribeError("compress", "ffmpeg-failed: invalid audio frame")
+      new GroqTranscribeError(
+        "compress",
+        "ffmpeg-failed: invalid audio frame",
+        "ffmpeg-failed"
+      )
     );
     vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
     const localSpy = vi

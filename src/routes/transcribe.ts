@@ -11,6 +11,24 @@ import {
   GroqTranscribeError,
   transcribeViaGroq,
 } from "../lib/groq-transcribe.js";
+import type { AudioCompressKind } from "../lib/audio-compress.js";
+
+// Exhaustive switch ensures any new AudioCompressKind requires an
+// explicit decision — TypeScript will error on the `never` assignment
+// in default if a kind is added to the union without being handled.
+function isOperationalCompressKind(kind: AudioCompressKind): boolean {
+  switch (kind) {
+    case "missing-binary":
+    case "timeout":
+      return true;
+    case "ffmpeg-failed":
+      return false;
+    default: {
+      const _exhaustive: never = kind;
+      return false;
+    }
+  }
+}
 
 // Module-scoped so the GROQ_API_KEY_MISSING warning fires once per
 // process rather than once per request. Logs flooding stderr don't
@@ -104,11 +122,18 @@ transcribe.post("/", async (c) => {
         // compress: ffmpeg-failed (bad input) is intentionally fallback-eligible
         // — local Whisper may handle the audio differently and the user still
         // gets a result.
+        //
+        // Discrimination is by typed compressKind (not bodyExcerpt prefix) so
+        // the route doesn't depend on the private message format that
+        // groq-transcribe.ts uses for log fidelity. Adding a new
+        // AudioCompressKind triggers a TypeScript exhaustiveness error in
+        // isOperationalCompressKind above — the kind cannot be silently
+        // fallback-eligible by default.
         const isRateLimited = err.status === 429;
         const isOperationalCompressFailure =
           err.status === "compress" &&
-          (err.bodyExcerpt?.startsWith("missing-binary:") === true ||
-            err.bodyExcerpt?.startsWith("timeout:") === true);
+          err.compressKind !== undefined &&
+          isOperationalCompressKind(err.compressKind);
         const isFatalUpstream = isRateLimited || isOperationalCompressFailure;
         // audioSeconds === null means ffprobe failed; fail closed (treat
         // as "too long for fallback") so a noisy probe doesn't promote
