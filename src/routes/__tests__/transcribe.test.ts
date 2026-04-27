@@ -361,6 +361,7 @@ describe("POST /transcribe — Groq orchestration", () => {
         audioSeconds: 60,
         fallbackCap: 180,
         groqStatus: "compress",
+        compressKind: "missing-binary",
       })
     );
     expect(ytdlpLib.cleanupAudio).toHaveBeenCalledWith("/tmp/fake.mp3");
@@ -391,6 +392,7 @@ describe("POST /transcribe — Groq orchestration", () => {
         audioSeconds: 60,
         fallbackCap: 180,
         groqStatus: "compress",
+        compressKind: "timeout",
       })
     );
   });
@@ -424,6 +426,36 @@ describe("POST /transcribe — Groq orchestration", () => {
       expect.objectContaining({
         errorId: "GROQ_FALLBACK",
         groqStatus: "compress",
+        compressKind: "ffmpeg-failed",
+      })
+    );
+  });
+
+  it("returns 503 on compress error with missing compressKind (fail-closed default)", async () => {
+    // A future throw that omits compressKind must NOT silently fall back.
+    // The fail-closed default in the route discriminator handles the
+    // case where the error class allows undefined compressKind for
+    // back-compat.
+    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
+      new GroqTranscribeError("compress", "some-detail-missing-kind")
+      // Note: no third arg — compressKind is undefined.
+    );
+    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
+    const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+
+    expect(res.status).toBe(503);
+    expect(localSpy).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("GROQ_FAILED_NO_FALLBACK"),
+      expect.objectContaining({
+        errorId: "GROQ_FAILED_NO_FALLBACK",
+        groqStatus: "compress",
+        compressKind: undefined,
       })
     );
   });

@@ -127,13 +127,20 @@ transcribe.post("/", async (c) => {
         // the route doesn't depend on the private message format that
         // groq-transcribe.ts uses for log fidelity. Adding a new
         // AudioCompressKind triggers a TypeScript exhaustiveness error in
-        // isOperationalCompressKind above — the kind cannot be silently
-        // fallback-eligible by default.
+        // isOperationalCompressKind above — every union variant must be
+        // assigned a fallback decision.
+        //
+        // Fail-closed default: an unknown or missing compressKind is treated
+        // as operational (no fallback). The GroqTranscribeError class still
+        // declares compressKind as optional for back-compat, so a future
+        // throw site that forgets to pass it must surface the error rather
+        // than silently fall back to local Whisper. This mirrors the
+        // fail-closed pattern below for audioSeconds === null.
         const isRateLimited = err.status === 429;
         const isOperationalCompressFailure =
           err.status === "compress" &&
-          err.compressKind !== undefined &&
-          isOperationalCompressKind(err.compressKind);
+          (err.compressKind === undefined ||
+            isOperationalCompressKind(err.compressKind));
         const isFatalUpstream = isRateLimited || isOperationalCompressFailure;
         // audioSeconds === null means ffprobe failed; fail closed (treat
         // as "too long for fallback") so a noisy probe doesn't promote
@@ -152,6 +159,7 @@ transcribe.post("/", async (c) => {
               videoId,
               audioSeconds,
               groqStatus: err.status,
+              compressKind: err.compressKind,
             }
           );
           segments = await transcribeAudio(audioPath, lang);
@@ -164,6 +172,7 @@ transcribe.post("/", async (c) => {
               audioSeconds,
               fallbackCap,
               groqStatus: err.status,
+              compressKind: err.compressKind,
             }
           );
           return c.json(
