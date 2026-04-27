@@ -297,39 +297,42 @@ describe("POST /transcribe — Groq orchestration", () => {
     );
   });
 
-  it("returns 503 when Groq returns 429 (rate-limited), regardless of audio length — no local fallback for quota exhaustion", async () => {
-    // Quota exhaustion is the one Groq failure mode we deliberately do
-    // NOT mask via local Whisper. The in-process retry inside
-    // groq-transcribe.ts has already covered transient per-minute blips
-    // by the time we see this error, so 429 here means the quota is
-    // genuinely out and the user should see a transcription error
-    // rather than a silently-slower local-Whisper summary.
-    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
-      new GroqTranscribeError(429, "rate limited")
-    );
-    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
-    const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  it.each([60, 900])(
+    "returns 503 when Groq returns 429 (rate-limited) at audio=%ds — no local fallback for quota exhaustion",
+    async (audioSeconds) => {
+      // Quota exhaustion is the one Groq failure mode we deliberately do
+      // NOT mask via local Whisper. The in-process retry inside
+      // groq-transcribe.ts has already covered transient per-minute blips
+      // by the time we see this error, so 429 here means the quota is
+      // genuinely out and the user should see a transcription error
+      // rather than a silently-slower local-Whisper summary.
+      vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
+        new GroqTranscribeError(429, "rate limited")
+      );
+      vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(audioSeconds);
+      const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const res = await post({
-      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    });
+      const res = await post({
+        youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      });
 
-    expect(res.status).toBe(503);
-    expect(localSpy).not.toHaveBeenCalled();
-    const body = await res.json();
-    expect(body.error).toMatch(/temporarily unavailable/i);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("GROQ_FAILED_NO_FALLBACK"),
-      expect.objectContaining({
-        errorId: "GROQ_FAILED_NO_FALLBACK",
-        audioSeconds: 60,
-        fallbackCap: 180,
-        groqStatus: 429,
-      })
-    );
-    expect(ytdlpLib.cleanupAudio).toHaveBeenCalledWith("/tmp/fake.mp3");
-  });
+      expect(res.status).toBe(503);
+      expect(localSpy).not.toHaveBeenCalled();
+      const body = await res.json();
+      expect(body.error).toMatch(/temporarily unavailable/i);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("GROQ_FAILED_NO_FALLBACK"),
+        expect.objectContaining({
+          errorId: "GROQ_FAILED_NO_FALLBACK",
+          audioSeconds,
+          fallbackCap: 180,
+          groqStatus: 429,
+        })
+      );
+      expect(ytdlpLib.cleanupAudio).toHaveBeenCalledWith("/tmp/fake.mp3");
+    }
+  );
 
   it("returns 503 when Groq fails and audio > fallback cap (no local attempt)", async () => {
     vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
