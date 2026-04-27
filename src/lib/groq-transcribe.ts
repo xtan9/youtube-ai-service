@@ -1,5 +1,10 @@
 import { readFile } from "fs/promises";
 import { z } from "zod";
+import {
+  AudioCompressError,
+  cleanupCompressed,
+  compressForGroq,
+} from "./audio-compress.js";
 import type { TranscriptSegment } from "./captions.js";
 
 // Subset of Groq's `verbose_json` response we consume. Groq's full shape
@@ -23,7 +28,12 @@ export const GroqResponseSchema = z.object({
 // errors (and the synthetic "schema" we raise on Zod parse failures).
 export class GroqTranscribeError extends Error {
   constructor(
-    public readonly status: number | "network" | "timeout" | "schema",
+    public readonly status:
+      | number
+      | "network"
+      | "timeout"
+      | "schema"
+      | "compress",
     public readonly bodyExcerpt?: string
   ) {
     super(
@@ -63,95 +73,114 @@ export async function transcribeViaGroq(
       ? rawTimeout
       : DEFAULT_TIMEOUT_MS;
 
-  const fileBytes = await readFile(audioPath);
-  const buildBody = () => {
-    const body = new FormData();
-    body.append(
-      "file",
-      // Groq's API ignores the multipart MIME and trusts the filename
-      // extension for format detection, so a single hardcoded MIME is
-      // safe across yt-dlp's output formats (mp3 / m4a / opus / webm).
-      new Blob([fileBytes], { type: "audio/mpeg" }),
-      // `||` (not `??`) so empty string + paths ending in `/` also fall
-      // through to the default filename. Defensive — yt-dlp produces
-      // real paths in practice.
-      audioPath.split("/").pop() || "audio.mp3"
-    );
-    body.append("model", model);
-    body.append("response_format", "verbose_json");
-    if (lang) body.append("language", lang);
-    return body;
-  };
-
-  const doFetch = () =>
-    fetch(GROQ_URL, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: buildBody(),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-
-  let resp: Response;
+  // Re-encode to 16 kHz mono 32 kbps mp3 before upload. yt-dlp's
+  // `--audio-quality 0` mp3 averages ~245 kbps VBR, which exceeds Groq's
+  // 25 MB free-tier limit at ~13 minutes of audio. Compression is loss-
+  // free for transcription accuracy (Whisper trains at 16 kHz mono) and
+  // shrinks the upload by ~7×.
+  let uploadPath: string;
   try {
-    resp = await doFetch();
-    // Single retry on 429. Free-tier rate limits are per-minute, so a
-    // brief backoff usually clears. We deliberately do NOT retry 5xx —
-    // Groq's incidents tend to last longer than 2s and we want to fail
-    // through to the local fallback quickly.
-    if (resp.status === 429) {
-      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+    uploadPath = await compressForGroq(audioPath);
+  } catch (err) {
+    if (err instanceof AudioCompressError) {
+      // Surface as a Groq-side failure so the route's catch can apply
+      // the same fallback rules (eligible for local Whisper iff audio
+      // ≤ GROQ_LOCAL_FALLBACK_MAX_SECONDS, else 503). From the route's
+      // perspective the cloud path is unavailable for this request.
+      throw new GroqTranscribeError("compress", err.stderr);
+    }
+    throw err;
+  }
+
+  try {
+    const fileBytes = await readFile(uploadPath);
+    const buildBody = () => {
+      const body = new FormData();
+      body.append(
+        "file",
+        new Blob([fileBytes], { type: "audio/mpeg" }),
+        // Compressed filename ends in .mp3 by construction; Groq trusts
+        // the extension for format detection.
+        uploadPath.split("/").pop() || "audio.mp3"
+      );
+      body.append("model", model);
+      body.append("response_format", "verbose_json");
+      if (lang) body.append("language", lang);
+      return body;
+    };
+
+    const doFetch = () =>
+      fetch(GROQ_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: buildBody(),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+
+    let resp: Response;
+    try {
       resp = await doFetch();
+      // Single retry on 429. Free-tier rate limits are per-minute, so a
+      // brief backoff usually clears. We deliberately do NOT retry 5xx —
+      // Groq's incidents tend to last longer than 2s and we want to fail
+      // through to the local fallback quickly.
+      if (resp.status === 429) {
+        await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+        resp = await doFetch();
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === "TimeoutError") {
+        throw new GroqTranscribeError("timeout");
+      }
+      throw new GroqTranscribeError(
+        "network",
+        err instanceof Error ? err.message : String(err)
+      );
     }
-  } catch (err) {
-    if (err instanceof Error && err.name === "TimeoutError") {
-      throw new GroqTranscribeError("timeout");
+
+    if (!resp.ok) {
+      // `.text().catch(() => "")` mirrors the existing vps-client.ts safety
+      // pattern — a body-read failure must not swallow the original status.
+      const text = await resp.text().catch(() => "");
+      throw new GroqTranscribeError(resp.status, text);
     }
-    throw new GroqTranscribeError(
-      "network",
-      err instanceof Error ? err.message : String(err)
-    );
-  }
 
-  if (!resp.ok) {
-    // `.text().catch(() => "")` mirrors the existing vps-client.ts safety
-    // pattern — a body-read failure must not swallow the original status.
-    const text = await resp.text().catch(() => "");
-    throw new GroqTranscribeError(resp.status, text);
-  }
+    let raw: unknown;
+    try {
+      raw = await resp.json();
+    } catch (err) {
+      throw new GroqTranscribeError(
+        "schema",
+        `JSON parse: ${err instanceof Error ? err.message : err}`
+      );
+    }
 
-  let raw: unknown;
-  try {
-    raw = await resp.json();
-  } catch (err) {
-    throw new GroqTranscribeError(
-      "schema",
-      `JSON parse: ${err instanceof Error ? err.message : err}`
-    );
-  }
+    const parsed = GroqResponseSchema.safeParse(raw);
+    if (!parsed.success) {
+      throw new GroqTranscribeError("schema", parsed.error.message);
+    }
 
-  const parsed = GroqResponseSchema.safeParse(raw);
-  if (!parsed.success) {
-    throw new GroqTranscribeError("schema", parsed.error.message);
+    // Drop empty / whitespace-only segments (Groq occasionally emits a
+    // trailing empty-text segment for end-of-audio silence — same defensive
+    // behavior parseWhisperJson already applies).
+    const segments: TranscriptSegment[] = [];
+    for (const s of parsed.data.segments) {
+      const text = s.text.trim();
+      if (!text) continue;
+      segments.push({
+        text,
+        start: s.start,
+        duration: Math.max(0, s.end - s.start),
+      });
+    }
+    // Return empty segments verbatim — the route's existing length check
+    // handles "no usable content" identically for both this backend and
+    // the local-Whisper fallback path (WHISPER_EMPTY_RESULT). Throwing
+    // here would break that symmetry by routing the response through the
+    // Groq-failure catch (fallback / 503) instead of the cleaner 500 +
+    // "Transcription produced no content."
+    return { segments, language: parsed.data.language ?? lang ?? "auto" };
+  } finally {
+    await cleanupCompressed(uploadPath);
   }
-
-  // Drop empty / whitespace-only segments (Groq occasionally emits a
-  // trailing empty-text segment for end-of-audio silence — same defensive
-  // behavior parseWhisperJson already applies).
-  const segments: TranscriptSegment[] = [];
-  for (const s of parsed.data.segments) {
-    const text = s.text.trim();
-    if (!text) continue;
-    segments.push({
-      text,
-      start: s.start,
-      duration: Math.max(0, s.end - s.start),
-    });
-  }
-  // Return empty segments verbatim — the route's existing length check
-  // handles "no usable content" identically for both this backend and
-  // the local-Whisper fallback path (WHISPER_EMPTY_RESULT). Throwing
-  // here would break that symmetry by routing the response through the
-  // Groq-failure catch (fallback / 503) instead of the cleaner 500 +
-  // "Transcription produced no content."
-  return { segments, language: parsed.data.language ?? lang ?? "auto" };
 }

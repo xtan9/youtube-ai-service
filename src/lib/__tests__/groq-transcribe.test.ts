@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFile } from "fs/promises";
+import * as audioCompress from "../audio-compress.js";
 import {
   transcribeViaGroq,
   GroqTranscribeError,
@@ -10,7 +11,23 @@ vi.mock("fs/promises", () => ({
   readFile: vi.fn(),
 }));
 
+// Mock audio-compress so tests don't shell out to ffmpeg; we just
+// verify Groq receives the path the compressor returned.
+vi.mock("../audio-compress.js", () => ({
+  AudioCompressError: class AudioCompressError extends Error {
+    constructor(public readonly stderr: string) {
+      super(`Audio compression failed: ${stderr.slice(0, 200)}`);
+      this.name = "AudioCompressError";
+    }
+  },
+  compressForGroq: vi.fn(),
+  cleanupCompressed: vi.fn(),
+}));
+
 const mockedReadFile = vi.mocked(readFile);
+const mockedCompress = vi.mocked(audioCompress.compressForGroq);
+const mockedCleanup = vi.mocked(audioCompress.cleanupCompressed);
+const COMPRESSED_PATH = "/tmp/groq-compressed.mp3";
 const validGroqBody = {
   language: "en",
   segments: [
@@ -30,12 +47,16 @@ describe("transcribeViaGroq", () => {
   beforeEach(() => {
     vi.stubEnv("GROQ_API_KEY", "test-key");
     mockedReadFile.mockResolvedValue(Buffer.from("fake-audio-bytes"));
+    mockedCompress.mockResolvedValue(COMPRESSED_PATH);
+    mockedCleanup.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+    mockedCompress.mockReset();
+    mockedCleanup.mockReset();
   });
 
   it("posts the audio file and parses Groq's verbose_json into our segment shape", async () => {
@@ -192,6 +213,66 @@ describe("transcribeViaGroq", () => {
     const result = await transcribeViaGroq("/tmp/clip.mp3");
     expect(result.segments).toEqual([]);
     expect(result.language).toBe("en");
+  });
+
+  it("compresses audio before upload and sends the compressed file's bytes to Groq", async () => {
+    // The original yt-dlp output (~245kbps mp3) blows past Groq's 25MB
+    // free-tier limit at ~13 min of audio. We re-encode to 16kHz mono
+    // 32kbps mp3 first, then upload that smaller file.
+    mockedReadFile.mockReset();
+    mockedReadFile.mockImplementation(async (path: unknown) => {
+      if (path === COMPRESSED_PATH) return Buffer.from("compressed-bytes");
+      return Buffer.from("ORIGINAL-DO-NOT-UPLOAD");
+    });
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip-orig.mp3");
+
+    expect(mockedCompress).toHaveBeenCalledWith("/tmp/clip-orig.mp3");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const formData = init.body as FormData;
+    const file = formData.get("file") as File;
+    const sentBytes = Buffer.from(await file.arrayBuffer());
+    expect(sentBytes.toString()).toBe("compressed-bytes");
+  });
+
+  it("cleans up the compressed temp file even when Groq returns 5xx", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("boom", { status: 500 }))
+    );
+
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: 500,
+    });
+    expect(mockedCleanup).toHaveBeenCalledWith(COMPRESSED_PATH);
+  });
+
+  it("cleans up the compressed temp file on the happy path", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(okResponse(validGroqBody)));
+
+    await transcribeViaGroq("/tmp/clip.mp3");
+
+    expect(mockedCleanup).toHaveBeenCalledWith(COMPRESSED_PATH);
+  });
+
+  it("throws GroqTranscribeError(status='compress') when re-encode fails", async () => {
+    // ffmpeg failure is treated symmetrically with a Groq-side failure
+    // so the route's catch can apply the same fallback rules.
+    mockedCompress.mockRejectedValueOnce(
+      new audioCompress.AudioCompressError("Invalid data found in input")
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(transcribeViaGroq("/tmp/clip.mp3")).rejects.toMatchObject({
+      status: "compress",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    // No compressed file was produced, so cleanup must not be called
+    // with a stale value.
+    expect(mockedCleanup).not.toHaveBeenCalled();
   });
 
   it("coerces a segment whose start > end to duration=0 (defensive)", async () => {
