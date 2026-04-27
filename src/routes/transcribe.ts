@@ -91,12 +91,21 @@ transcribe.post("/", async (c) => {
         const audioSeconds = await probeAudioDurationSeconds(audioPath);
         const fallbackCap =
           Number(process.env.GROQ_LOCAL_FALLBACK_MAX_SECONDS) || 180;
+        // Quota exhaustion is the one Groq failure we deliberately surface as
+        // an error rather than mask with local Whisper. groq-transcribe.ts
+        // already retries 429 once with a 2 s backoff, so reaching this branch
+        // means Groq's quota is genuinely out — silent degradation here would
+        // hide the operational signal and turn a "transcription unavailable"
+        // event into "the site got slow today."
+        const isRateLimited = err.status === 429;
         // audioSeconds === null means ffprobe failed; fail closed (treat
         // as "too long for fallback") so a noisy probe doesn't promote
         // a routine Groq blip into a multi-minute local-Whisper attempt
         // for a video we can't bound.
         const eligibleForFallback =
-          audioSeconds !== null && audioSeconds <= fallbackCap;
+          !isRateLimited &&
+          audioSeconds !== null &&
+          audioSeconds <= fallbackCap;
 
         if (eligibleForFallback) {
           console.warn(
