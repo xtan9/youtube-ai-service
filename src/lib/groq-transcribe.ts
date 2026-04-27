@@ -74,20 +74,25 @@ export async function transcribeViaGroq(
       : DEFAULT_TIMEOUT_MS;
 
   // Re-encode to 16 kHz mono 32 kbps mp3 before upload. yt-dlp's
-  // `--audio-quality 0` mp3 averages ~245 kbps VBR, which exceeds Groq's
-  // 25 MB free-tier limit at ~13 minutes of audio. Compression is loss-
-  // free for transcription accuracy (Whisper trains at 16 kHz mono) and
-  // shrinks the upload by ~7×.
+  // `--audio-quality 0` mp3 produces ~245 kbps VBR, which blows past
+  // Groq's 25 MB free-tier upload cap once audio crosses ~14 min.
+  // Downsampling to Whisper's native 16 kHz mono is transcription-
+  // neutral (Whisper resamples to that rate before inference anyway).
   let uploadPath: string;
   try {
     uploadPath = await compressForGroq(audioPath);
   } catch (err) {
     if (err instanceof AudioCompressError) {
       // Surface as a Groq-side failure so the route's catch can apply
-      // the same fallback rules (eligible for local Whisper iff audio
-      // ≤ GROQ_LOCAL_FALLBACK_MAX_SECONDS, else 503). From the route's
-      // perspective the cloud path is unavailable for this request.
-      throw new GroqTranscribeError("compress", err.stderr);
+      // the same fallback rules — eligible for local Whisper iff the
+      // audio is short enough per the route's fallback cap, else 503.
+      // Detail string carries the AudioCompressError kind so the route
+      // log distinguishes "missing-binary" (deploy regression) from
+      // "ffmpeg-failed" (bad input) from "timeout" (host saturation).
+      throw new GroqTranscribeError(
+        "compress",
+        `${err.kind}: ${err.detail}`
+      );
     }
     throw err;
   }
@@ -181,6 +186,23 @@ export async function transcribeViaGroq(
     // "Transcription produced no content."
     return { segments, language: parsed.data.language ?? lang ?? "auto" };
   } finally {
-    await cleanupCompressed(uploadPath);
+    // Defensive: cleanupCompressed today swallows non-leak errors (logs
+    // them) so it should never throw, but a future cleanup-error policy
+    // change must NOT swallow the body's throw via finally semantics.
+    try {
+      await cleanupCompressed(uploadPath);
+    } catch (cleanupErr) {
+      console.warn(
+        `[groq-transcribe] CLEANUP_COMPRESSED_THREW for ${uploadPath}`,
+        {
+          errorId: "CLEANUP_COMPRESSED_THREW",
+          path: uploadPath,
+          error:
+            cleanupErr instanceof Error
+              ? cleanupErr.message
+              : String(cleanupErr),
+        }
+      );
+    }
   }
 }
