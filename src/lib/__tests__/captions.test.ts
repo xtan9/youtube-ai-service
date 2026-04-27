@@ -10,6 +10,7 @@ import {
   fetchTranscript,
   YoutubeTranscriptDisabledError,
   YoutubeTranscriptNotAvailableError,
+  YoutubeTranscriptNotAvailableLanguageError,
   type TranscriptSegment,
 } from "youtube-transcript-plus";
 
@@ -379,5 +380,242 @@ describe("fetchCaptions", () => {
     await fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "fr");
     const call = mockedFetchTranscript.mock.calls[0];
     expect(call[1]).toEqual({ videoDetails: true, lang: "fr" });
+  });
+
+  describe("fetchCaptions: primary-subtag retry", () => {
+    beforeEach(() => {
+      mockedFetchTranscript.mockReset();
+    });
+
+    it("retries lang='zh' with the matching zh-Hans track and returns its segments", async () => {
+      const url = "https://youtu.be/dQw4w9WgXcQ";
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "zh",
+            ["zh-Hans", "en"],
+            "dQw4w9WgXcQ"
+          )
+        )
+        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hans" }]));
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await fetchCaptions(url, "zh");
+
+      expect(result).not.toBeNull();
+      expect(result!.language).toBe("zh");
+      expect(result!.segments[0].text).toBe("你好");
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
+      expect(mockedFetchTranscript.mock.calls[0][1]).toEqual({
+        videoDetails: true,
+        lang: "zh",
+      });
+      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
+        videoDetails: true,
+        lang: "zh-Hans",
+      });
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[captions] CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
+        expect.objectContaining({
+          errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
+          videoId: "dQw4w9WgXcQ",
+          requested: "zh",
+          matched: "zh-Hans",
+          available: ["zh-Hans", "en"],
+        })
+      );
+    });
+
+    it("returns null without retry when no available lang shares the primary subtag", async () => {
+      mockedFetchTranscript.mockRejectedValueOnce(
+        new YoutubeTranscriptNotAvailableLanguageError(
+          "zh",
+          ["en", "fr"],
+          "dQw4w9WgXcQ"
+        )
+      );
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        "zh"
+      );
+
+      expect(result).toBeNull();
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT retry when the requested lang is region-tagged (en-US)", async () => {
+      // Region-tagged callers asked for something specific. Don't second-guess
+      // by downgrading to a different en variant.
+      mockedFetchTranscript.mockRejectedValueOnce(
+        new YoutubeTranscriptNotAvailableLanguageError(
+          "en-US",
+          ["en"],
+          "dQw4w9WgXcQ"
+        )
+      );
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        "en-US"
+      );
+
+      expect(result).toBeNull();
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
+    });
+
+    it("matches script+region variants like zh-Hant-TW", async () => {
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "zh",
+            ["zh-Hant-TW"],
+            "dQw4w9WgXcQ"
+          )
+        )
+        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hant-TW" }]));
+
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        "zh"
+      );
+
+      expect(result).not.toBeNull();
+      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
+        videoDetails: true,
+        lang: "zh-Hant-TW",
+      });
+    });
+
+    it("matches case-insensitively (lang='ZH' resolves zh-Hans)", async () => {
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "ZH",
+            ["zh-Hans"],
+            "dQw4w9WgXcQ"
+          )
+        )
+        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hans" }]));
+
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        "ZH"
+      );
+
+      expect(result).not.toBeNull();
+      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
+        videoDetails: true,
+        lang: "zh-Hans",
+      });
+    });
+
+    it("returns null when the retry also throws an expected no-captions error", async () => {
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "zh",
+            ["zh-Hans"],
+            "dQw4w9WgXcQ"
+          )
+        )
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableError("dQw4w9WgXcQ")
+        );
+
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        "zh"
+      );
+
+      expect(result).toBeNull();
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
+    });
+
+    it("rethrows when the retry throws an unexpected error (alertable, not silently null)", async () => {
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "zh",
+            ["zh-Hans"],
+            "dQw4w9WgXcQ"
+          )
+        )
+        .mockRejectedValueOnce(new TypeError("boom"));
+
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(
+        fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "zh")
+      ).rejects.toBeInstanceOf(TypeError);
+
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[captions] CAPTION_UNEXPECTED_FAILURE",
+        expect.objectContaining({
+          errorId: "CAPTION_UNEXPECTED_FAILURE",
+          videoId: "dQw4w9WgXcQ",
+          errorClass: "TypeError",
+          originalLang: "zh",
+          retryLang: "zh-Hans",
+        })
+      );
+    });
+
+    it("picks the first matching variant in availableLangs order (preserves YouTube's track order)", async () => {
+      // YouTube returns availableLangs in track order. The retry must
+      // preserve that — a 'sort' or 'prefer simplified' refactor would
+      // silently change which variant resolves and which transcript gets
+      // cached. zh-Hant-TW comes before zh-Hans here even though zh-Hans
+      // would be the more "natural" Mandarin pick.
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "zh",
+            ["zh-Hant-TW", "zh-Hans"],
+            "dQw4w9WgXcQ"
+          )
+        )
+        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hant-TW" }]));
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "zh");
+
+      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
+        videoDetails: true,
+        lang: "zh-Hant-TW",
+      });
+    });
+
+    it("returns null without retry when availableLangs is empty", async () => {
+      // Defensive: the library could theoretically throw NotAvailableLanguage
+      // with an empty availableLangs array (e.g. a future schema where the
+      // language-mismatch class fires before track discovery completes).
+      // findSubtagMatch returns null for empty input, so we should fall
+      // through to "no captions" without crashing or retrying.
+      mockedFetchTranscript.mockRejectedValueOnce(
+        new YoutubeTranscriptNotAvailableLanguageError(
+          "zh",
+          [],
+          "dQw4w9WgXcQ"
+        )
+      );
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        "zh"
+      );
+
+      expect(result).toBeNull();
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
+    });
   });
 });

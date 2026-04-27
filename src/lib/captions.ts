@@ -116,6 +116,26 @@ export function extractVideoId(url: string): string | null {
   return null;
 }
 
+// youtube-transcript-plus matches a requested `lang` against the track's
+// `languageCode` with strict equality. YouTube tags Chinese tracks as
+// `zh-Hans`/`zh-Hant-TW`/etc. so a primary-subtag-only request like `"zh"`
+// silently misses and falls through to "no captions". When the library
+// throws NotAvailableLanguageError it surfaces the actual track codes via
+// `availableLangs`; this helper picks the first one whose primary subtag
+// matches the request, case-insensitive. Returns null for region-tagged
+// inputs (the caller asked for `"en-US"` specifically — don't downgrade
+// to `"en"` behind their back).
+function findSubtagMatch(
+  lang: string,
+  available: readonly string[]
+): string | null {
+  if (lang.includes("-")) return null;
+  const want = lang.toLowerCase();
+  return (
+    available.find((code) => code.toLowerCase().split("-")[0] === want) ?? null
+  );
+}
+
 // Errors the library raises for "this video genuinely has no captions" —
 // expected outcomes that callers handle with a Whisper fallback. Anything
 // else (TypeError from schema drift, fetch abort, parse failure) is an
@@ -181,14 +201,52 @@ export async function fetchCaptions(
     });
     result = response as TranscriptResult;
   } catch (err) {
-    if (isExpectedNoCaptions(err)) return null;
-    console.error("[captions] CAPTION_UNEXPECTED_FAILURE", {
-      errorId: "CAPTION_UNEXPECTED_FAILURE",
-      videoId,
-      errorClass: err instanceof Error ? err.constructor.name : typeof err,
-      err,
-    });
-    throw err;
+    // Strict-equality match inside the library means primary-subtag
+    // requests (e.g. `"zh"`) miss region/script-tagged tracks
+    // (`"zh-Hans"`). Catch that one shape and retry with the matched
+    // code before falling through to the generic no-captions path.
+    if (lang && err instanceof YoutubeTranscriptNotAvailableLanguageError) {
+      const matched = findSubtagMatch(lang, err.availableLangs);
+      if (!matched) return null;
+      console.warn("[captions] CAPTION_LANG_RETRY_PRIMARY_SUBTAG", {
+        errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
+        videoId,
+        requested: lang,
+        matched,
+        available: err.availableLangs,
+      });
+      try {
+        const retryResponse = await fetchTranscript(videoId, {
+          videoDetails: true,
+          lang: matched,
+        });
+        result = retryResponse as TranscriptResult;
+      } catch (retryErr) {
+        if (isExpectedNoCaptions(retryErr)) return null;
+        console.error("[captions] CAPTION_UNEXPECTED_FAILURE", {
+          errorId: "CAPTION_UNEXPECTED_FAILURE",
+          videoId,
+          errorClass:
+            retryErr instanceof Error
+              ? retryErr.constructor.name
+              : typeof retryErr,
+          err: retryErr,
+          originalLang: lang,
+          retryLang: matched,
+        });
+        throw retryErr;
+      }
+    } else if (isExpectedNoCaptions(err)) {
+      return null;
+    } else {
+      console.error("[captions] CAPTION_UNEXPECTED_FAILURE", {
+        errorId: "CAPTION_UNEXPECTED_FAILURE",
+        videoId,
+        errorClass: err instanceof Error ? err.constructor.name : typeof err,
+        err,
+      });
+      throw err;
+    }
   }
 
   const { segments: ytSegments, videoDetails } = result;
