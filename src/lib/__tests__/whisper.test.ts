@@ -62,6 +62,59 @@ describe("buildWhisperArgs", () => {
     const langIdx = args.indexOf("--language");
     expect(args[langIdx + 1]).toBe("zh");
   });
+
+  it("disables --condition_on_previous_text when a lang is pinned (stops drift propagation)", () => {
+    // The default is True, which carries forward the previous chunk's
+    // output as context for the next. When whisper hallucinates a
+    // wrong-language token in a non-speech window it propagates through
+    // subsequent chunks until strong native audio resets it — the bug
+    // captured on video hrREdNm7vB4 (Chinese audio, ~46% of segments
+    // hallucinated as English with `--language zh` already pinned).
+    // Setting it to False makes each window independent so a single
+    // bad chunk can't cascade.
+    const args = buildWhisperArgs("/tmp/audio.mp3", "zh");
+    const idx = args.indexOf("--condition_on_previous_text");
+    expect(idx).toBeGreaterThan(-1);
+    expect(args[idx + 1]).toBe("False");
+  });
+
+  it("emits --initial_prompt with a native-language anchor when lang is pinned", () => {
+    // Whisper's `--language` flag tells the model what to transcribe
+    // *to*, but doesn't bias output distribution chunk-by-chunk. A
+    // short native-language anchor in the prompt does — the
+    // belt-and-braces fix to the same drift problem the
+    // condition_on_previous_text=False guard handles. Asserting the
+    // anchor is non-empty and contains CJK chars for zh proves it's a
+    // real native-language anchor, not a stray English default.
+    const args = buildWhisperArgs("/tmp/audio.mp3", "zh");
+    const idx = args.indexOf("--initial_prompt");
+    expect(idx).toBeGreaterThan(-1);
+    const prompt = args[idx + 1];
+    expect(prompt).toBeTruthy();
+    expect(prompt).toMatch(/[一-鿿]/);
+  });
+
+  it("omits both drift mitigations when no lang is provided (back-compat)", () => {
+    // Callers that don't pass a lang must see the same argv they
+    // always have, so whisper's auto-detect runs unmodified. A stray
+    // condition_on_previous_text=False on the no-lang path would
+    // change behaviour for legitimately mixed-language clips that this
+    // PR isn't trying to address.
+    const args = buildWhisperArgs("/tmp/audio.mp3");
+    expect(args).not.toContain("--condition_on_previous_text");
+    expect(args).not.toContain("--initial_prompt");
+  });
+
+  it("omits --initial_prompt for a lang with no anchor (falls through to flag-only pinning)", () => {
+    // Strictly additive: an ISO 639-1 code we don't have an anchor for
+    // (Welsh, etc.) still gets `--language cy` and the
+    // condition_on_previous_text guard, but no prompt — sending a
+    // wrong-language anchor would actively reintroduce the drift.
+    const args = buildWhisperArgs("/tmp/audio.mp3", "cy");
+    expect(args).toContain("--language");
+    expect(args.indexOf("--condition_on_previous_text")).toBeGreaterThan(-1);
+    expect(args).not.toContain("--initial_prompt");
+  });
 });
 
 describe("parseWhisperJson", () => {
