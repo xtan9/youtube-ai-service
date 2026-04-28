@@ -65,6 +65,7 @@ describe("POST /metadata", () => {
   });
 
   it("returns 200 with language, title, description, duration, availableCaptions on happy path", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
       title: "Comment apprendre",
       description: "Une vidéo en français",
@@ -83,6 +84,14 @@ describe("POST /metadata", () => {
     expect(body.description).toBe("Une vidéo en français");
     expect(body.duration).toBe(893);
     expect(body.availableCaptions).toEqual(expect.arrayContaining(["fr", "en"]));
+    // The fallback warn must NOT fire on the happy path — a refactor
+    // that always logs (e.g. moves the warn outside the null branch)
+    // would silently flood ops dashboards with false-positive miss
+    // signals and make the dashboards useless for real regressions.
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("LANGUAGE_DETECT_FALLBACK"),
+      expect.anything()
+    );
   });
 
   it("forwards duration=null (live streams) without coercing to 0", async () => {
@@ -103,6 +112,38 @@ describe("POST /metadata", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.duration).toBeNull();
+  });
+
+  it("maps detectLanguage null → 'en' with structured LANGUAGE_DETECT_FALLBACK warn", async () => {
+    // Wire-contract back-compat: the frontend's VPS metadata schema
+    // rejects `language: null`, so the route must emit a string. The
+    // fallback log lets ops track miss rate without breaking
+    // deserialization. Capture the structured warn so a future
+    // refactor that drops the log fails this test instead of silently
+    // hiding a rising fallback rate.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
+      title: "", // no title and no description = no detection signal at all
+      description: "",
+      language: null,
+      duration: null,
+      subtitles: {},
+      automatic_captions: {},
+    });
+    const res = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.language).toBe("en");
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("LANGUAGE_DETECT_FALLBACK"),
+      expect.objectContaining({
+        errorId: "LANGUAGE_DETECT_FALLBACK",
+        hasLanguageField: false,
+        subtitleKeyCount: 0,
+      })
+    );
   });
 
   it("returns 500 with a generic message when yt-dlp throws", async () => {

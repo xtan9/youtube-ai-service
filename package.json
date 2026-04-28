@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^2.0.0",
-    "franc": "^6.2.0",
+    "eld": "^2.0.3",
     "hono": "^4.12.15",
     "youtube-transcript-plus": "^2.0.0",
     "zod": "^4.3.6"

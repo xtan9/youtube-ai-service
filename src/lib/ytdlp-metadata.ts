@@ -4,8 +4,8 @@ import type { YtdlpMetadata } from "./language-detect.js";
 
 // Descriptions are unbounded user content. Truncate before returning so we
 // don't bloat JSON responses or log lines. 2000 chars is more than enough
-// for language detection (franc's trigram model saturates around ~200
-// chars) and fits comfortably in a debug log.
+// for eld's n-gram language model (saturates well below this cap) and
+// fits comfortably in a debug log.
 const DESCRIPTION_CHAR_CAP = 2000;
 
 // Metadata extraction is fast compared to audio download (no byte

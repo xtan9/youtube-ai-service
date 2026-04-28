@@ -43,7 +43,28 @@ metadata.post("/", async (c) => {
   try {
     console.log(`Fetching metadata for video ${videoId}`);
     const ytdlpMeta = await fetchYtdlpMetadata(youtube_url);
-    const language = detectLanguage(ytdlpMeta);
+    const detected = detectLanguage(ytdlpMeta);
+    // The wire contract requires `language` to be a string (frontend
+    // schema rejects null). Map null → "en" at the route boundary so
+    // detectLanguage can honestly report "no signal" internally
+    // without breaking the API. The structured warn lets ops track
+    // fallback rate — a rising rate is a detection-quality regression
+    // or a corpus of metadata-sparse videos worth investigating.
+    let language: string;
+    if (detected) {
+      language = detected;
+    } else {
+      console.warn(`[metadata] LANGUAGE_DETECT_FALLBACK for video ${videoId}`, {
+        errorId: "LANGUAGE_DETECT_FALLBACK",
+        videoId,
+        hasLanguageField: Boolean(ytdlpMeta.language),
+        subtitleKeyCount: Object.keys(ytdlpMeta.subtitles).length,
+        textLength:
+          (ytdlpMeta.title?.length ?? 0) +
+          (ytdlpMeta.description?.length ?? 0),
+      });
+      language = "en";
+    }
     const availableCaptions = extractAvailableCaptions(ytdlpMeta);
 
     return c.json({

@@ -22,7 +22,7 @@ All data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
 
 ## Tech
 
-Node.js 22, Hono, Python (faster-whisper), yt-dlp, ffmpeg, `franc` for text-based language detection. Runs in Docker.
+Node.js 22, Hono, Python (faster-whisper), yt-dlp, ffmpeg, `eld` for text-based language detection (with a CJK Unicode-script fallback for short titles where eld is unreliable). Runs in Docker.
 
 ## Architecture
 
