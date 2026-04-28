@@ -12,47 +12,61 @@
 // native audio resets it. A native-language anchor in the prompt biases
 // the model's output distribution every chunk, not just the first.
 //
-// Each value is content-neutral ("the following is a sentence in
-// <language>") — long enough to give whisper a strong language
-// fingerprint, short enough to stay well under Whisper's 224-token
-// prompt cap. Only ISO 639-1 codes that detectLanguage() can return are
-// listed; unknown codes get null and the caller falls back to
-// language-only flag pinning (the prior behavior).
+// Each value is a natural conversational opener ("Hello everyone,
+// today let's talk about this topic") — content-shaped, not a
+// meta-template. The previous "The following is a sentence in <X>"
+// form was content-neutral but matched a documented Whisper
+// hallucination pattern: training data contains many "the following
+// is a sentence in <language>" prompts (TTS / ASR datasets), and
+// during long silent stretches Whisper regurgitates that exact
+// phrasing. Captured on the post-#23 verification of hrREdNm7vB4: a
+// segment at 194.03s was literally "The following is a sentence in
+// English." — the model echoed our own English anchor template
+// rather than producing native content. A natural-content opener
+// doesn't appear verbatim in training prompts the same way and is
+// less prone to regurgitation. The opener form also better matches
+// actual YouTube content (intros, podcasts) so the language
+// fingerprint is closer to the audio's own distribution.
 //
-// Aside on regurgitation: faster-whisper occasionally echoes the
-// initial_prompt into the first segment when audio opens with silence.
-// If a transcript ever surfaces a leading "The following is a sentence
-// in X" segment, that's the source — known tradeoff vs. the ~46%-
-// hallucination bug this fixes.
+// All entries fit comfortably under Whisper's 224-token prompt cap.
+// Only ISO 639-1 codes that detectLanguage() can return are listed;
+// unknown codes get null and the caller falls back to language-only
+// flag pinning (the prior behavior).
+//
+// Aside: Whisper still occasionally regurgitates initial_prompt during
+// silence, but a regurgitated "Hello everyone, today let's talk about
+// this topic" reads as plausible video content rather than the
+// obvious meta-phrase the previous form produced. The hallucination
+// doesn't disappear — its failure mode just becomes less user-visible.
 const LANGUAGE_ANCHOR_PROMPTS: Record<string, string> = {
-  en: "The following is a sentence in English.",
-  zh: "以下是普通话的句子。",
-  fr: "Ce qui suit est une phrase en français.",
-  es: "Lo siguiente es una oración en español.",
-  ja: "以下は日本語の文です。",
-  ko: "다음은 한국어 문장입니다.",
-  de: "Das Folgende ist ein Satz auf Deutsch.",
-  pt: "A seguir está uma frase em português.",
-  ru: "Это предложение на русском языке.",
-  it: "La seguente è una frase in italiano.",
-  ar: "ما يلي هو جملة باللغة العربية.",
-  hi: "यह हिंदी में एक वाक्य है।",
-  nl: "Het volgende is een zin in het Nederlands.",
-  tr: "Aşağıdaki Türkçe bir cümledir.",
-  vi: "Sau đây là một câu tiếng Việt.",
-  id: "Berikut adalah kalimat dalam bahasa Indonesia.",
-  th: "ต่อไปนี้เป็นประโยคภาษาไทย",
-  pl: "Poniżej znajduje się zdanie po polsku.",
-  uk: "Це речення українською мовою.",
-  sv: "Följande är en mening på svenska.",
-  da: "Følgende er en sætning på dansk.",
-  no: "Følgende er en setning på norsk.",
-  fi: "Seuraava on lause suomeksi.",
-  cs: "Následuje věta v češtině.",
-  el: "Το ακόλουθο είναι μια πρόταση στα ελληνικά.",
-  he: "להלן משפט בעברית.",
-  ro: "Următoarea este o propoziție în limba română.",
-  hu: "A következő egy mondat magyarul.",
+  en: "Hello everyone, today let's talk about this topic.",
+  zh: "大家好，今天我们来聊一聊这个话题。",
+  fr: "Bonjour à tous, parlons aujourd'hui de ce sujet.",
+  es: "Hola a todos, hoy vamos a hablar de este tema.",
+  ja: "皆さん、今日はこの話題について話しましょう。",
+  ko: "안녕하세요, 오늘은 이 주제에 대해 이야기해 봅시다.",
+  de: "Hallo zusammen, heute sprechen wir über dieses Thema.",
+  pt: "Olá a todos, hoje vamos falar sobre este assunto.",
+  ru: "Всем привет, сегодня поговорим об этой теме.",
+  it: "Ciao a tutti, oggi parliamo di questo argomento.",
+  ar: "مرحبا بالجميع، اليوم سنتحدث عن هذا الموضوع.",
+  hi: "नमस्ते दोस्तों, आज हम इस विषय पर बात करेंगे।",
+  nl: "Hallo allemaal, vandaag hebben we het over dit onderwerp.",
+  tr: "Herkese merhaba, bugün bu konu hakkında konuşacağız.",
+  vi: "Xin chào mọi người, hôm nay chúng ta sẽ nói về chủ đề này.",
+  id: "Halo semuanya, hari ini kita akan membahas topik ini.",
+  th: "สวัสดีทุกคน วันนี้เรามาคุยเรื่องนี้กัน",
+  pl: "Witajcie wszyscy, dziś porozmawiamy na ten temat.",
+  uk: "Привіт усім, сьогодні поговоримо на цю тему.",
+  sv: "Hej allihopa, idag ska vi prata om detta ämne.",
+  da: "Hej alle sammen, i dag taler vi om dette emne.",
+  no: "Hei alle sammen, i dag skal vi snakke om dette temaet.",
+  fi: "Hei kaikille, tänään puhumme tästä aiheesta.",
+  cs: "Ahoj všichni, dnes si povíme o tomto tématu.",
+  el: "Γεια σας, σήμερα θα μιλήσουμε για αυτό το θέμα.",
+  he: "שלום לכולם, היום נדבר על הנושא הזה.",
+  ro: "Salut tuturor, astăzi vom vorbi despre acest subiect.",
+  hu: "Sziasztok, ma erről a témáról fogunk beszélni.",
 };
 
 /**

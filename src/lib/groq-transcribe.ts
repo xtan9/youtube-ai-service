@@ -49,7 +49,15 @@ export class GroqTranscribeError extends Error {
 }
 
 const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
-const DEFAULT_MODEL = "whisper-large-v3-turbo";
+// `whisper-large-v3` is more robust than `-turbo` against the
+// long-silent-stretch hallucination class that survived the #23
+// anchor fix (post-deploy run on hrREdNm7vB4 still hallucinated 30%
+// non-Chinese segments in a 25s gap between Chinese speech, even with
+// the Chinese anchor pinned). Turbo is a distilled / faster model —
+// the speed savings aren't worth shipping nonsense English
+// mid-Chinese-audio. `GROQ_MODEL` env var override is preserved for a
+// future ops decision that wants the speed back.
+const DEFAULT_MODEL = "whisper-large-v3";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const RETRY_BACKOFF_MS = 2_000;
 
@@ -119,14 +127,14 @@ export async function transcribeViaGroq(
         // Native-language anchor biases the model toward the target
         // language even on non-speech audio (silence/music/B-roll
         // between sentences) where `language` alone isn't enough.
-        // Without this, whisper-large-v3-turbo on Groq hallucinates
-        // English (and even other languages — French "même" was
-        // observed) during low-speech segments and propagates the
-        // drift across subsequent chunks. Captured on video
-        // hrREdNm7vB4 where ~46% of a Chinese audio's segments came
-        // back as nonsense non-Chinese despite `language=zh`. Groq's
-        // hosted Whisper does not expose `condition_on_previous_text`,
-        // so `prompt` is the only available lever for this drift.
+        // Without this, Groq's hosted Whisper hallucinates English
+        // (and even other languages — French "même" was observed)
+        // during low-speech segments and propagates the drift across
+        // subsequent chunks. Captured on video hrREdNm7vB4 where ~46%
+        // of a Chinese audio's segments came back as nonsense
+        // non-Chinese despite `language=zh`. Groq's hosted Whisper
+        // does not expose `condition_on_previous_text`, so `prompt` is
+        // the only available lever for this drift.
         const anchor = getLanguageAnchorPrompt(lang);
         if (anchor) body.append("prompt", anchor);
       }

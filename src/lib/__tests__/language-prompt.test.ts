@@ -90,4 +90,31 @@ describe("getLanguageAnchorPrompt", () => {
     const prompt = getLanguageAnchorPrompt("ar");
     expect(prompt).toMatch(/[؀-ۿ]/);
   });
+
+  it("no anchor matches Whisper's documented meta-template hallucination pattern", () => {
+    // Regression guard for the post-#23 finding: the prior anchor form
+    // ("The following is a sentence in <X>") matched a Whisper
+    // training-data prompt template, and during long silent stretches
+    // the model regurgitated that exact phrasing as transcript output
+    // — segment 194.03s on hrREdNm7vB4 came back as literally "The
+    // following is a sentence in English." Anchors must be natural
+    // content openers, not meta-templates, so the failure mode shifts
+    // from "obvious meta-phrase" to "plausible video content" if
+    // regurgitation does occur. Iterate ISO_639_3_TO_1 (plus "en") so
+    // a future PR that adds a new anchor with the bad pattern fails
+    // here instead of silently re-introducing the bug.
+    const codes = new Set<string>([...Object.values(ISO_639_3_TO_1), "en"]);
+    for (const code of codes) {
+      const prompt = getLanguageAnchorPrompt(code);
+      expect(prompt, `null anchor for ${code}`).toBeTruthy();
+      // The English-typed phrasing is what Whisper's training data
+      // contains — guarding the literal pattern keeps non-English
+      // anchors out too if a future contributor copy-pastes the form
+      // and translates word-for-word.
+      expect(
+        prompt!.toLowerCase().includes("the following is a sentence"),
+        `${code} anchor uses the documented regurgitation template`
+      ).toBe(false);
+    }
+  });
 });

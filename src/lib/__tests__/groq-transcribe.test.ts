@@ -85,7 +85,7 @@ describe("transcribeViaGroq", () => {
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const formData = init.body as FormData;
     expect(formData.get("language")).toBe("fr");
-    expect(formData.get("model")).toBe("whisper-large-v3-turbo");
+    expect(formData.get("model")).toBe("whisper-large-v3");
     expect(formData.get("response_format")).toBe("verbose_json");
   });
 
@@ -105,11 +105,11 @@ describe("transcribeViaGroq", () => {
 
   it("sends a native-language `prompt` alongside `language` so the model doesn't drift", async () => {
     // Captured on video hrREdNm7vB4: with only `language=zh`, Groq's
-    // whisper-large-v3-turbo hallucinated English (and French "même")
-    // during non-speech segments and propagated through subsequent
-    // chunks via the model's internal prev-text conditioning. Groq's
-    // hosted Whisper does not expose `condition_on_previous_text`, so
-    // the `prompt` form field is the only available lever — a short
+    // hosted Whisper hallucinated English (and French "même") during
+    // non-speech segments and propagated through subsequent chunks
+    // via the model's internal prev-text conditioning. Groq's hosted
+    // Whisper does not expose `condition_on_previous_text`, so the
+    // `prompt` form field is the only available lever — a short
     // native-language anchor biases the output distribution every chunk
     // and stops the drift. Test asserts the anchor is non-empty and in
     // the target language so a future refactor can't drop the field
