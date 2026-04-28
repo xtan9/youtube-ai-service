@@ -64,7 +64,11 @@ export interface YtdlpMetadata {
 // yt-dlp / detector sentinels that mean "no linguistic content" or
 // "ambiguous" — forwarding any of these to whisper as `--language zxx`
 // produces a cryptic CLI error. Treat as "no signal" and let callers
-// fall through.
+// fall through. eld reports "no detection" by returning the empty
+// string, not a sentinel — so the und/mul/mis entries are
+// defensive-only for callers passing these tags through
+// `normalizeLanguageCode` (yt-dlp can emit `language: "zxx"` for
+// music-only tracks).
 const LANGUAGE_SENTINELS: ReadonlySet<string> = new Set([
   "und", // undetermined
   "zxx", // no linguistic content — yt-dlp uses this for music-only tracks
@@ -108,11 +112,14 @@ const JAPANESE_KANA_RE = /[぀-ゟ゠-ヿ]/;
 // Korean-only.
 const KOREAN_HANGUL_RE = /[가-힯ᄀ-ᇿ]/;
 // CJK Unified Ideographs (一–鿿) — used by Chinese (and
-// Japanese kanji, but kana check above pre-empts that case). Title-
-// only check on the assumption that any presence of Han chars in a
-// short YouTube title strongly suggests Chinese audience targeting,
-// even when mixed with Latin (e.g. "极海Channel" — eld misclassifies
-// this as French; the script check correctly returns zh).
+// Japanese kanji, but kana check above pre-empts that case). Applied
+// to the title + description concatenation; even one Han char
+// outweighs an ambiguous Latin / mixed-script eld guess (e.g.
+// "极海Channel" — eld returns French with isReliable=true, but a
+// single Han char is unambiguous Chinese signal). Doesn't cover CJK
+// Extension A (U+3400-U+4DBF) or B+ (U+20000+) — vanishingly rare for
+// YouTube titles and eld picks up the long tail; revisit if
+// LANGUAGE_DETECT_FALLBACK warns surface those characters.
 const HAN_RE = /[一-鿿]/;
 
 /**

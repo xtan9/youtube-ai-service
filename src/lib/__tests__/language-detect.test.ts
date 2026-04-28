@@ -139,11 +139,13 @@ describe("detectLanguage", () => {
     // for non-CJK short text — an unreliable Latin-script guess beats
     // null because the language hint then propagates to whisper's
     // prompt anchor, biasing output even on uncertain detection.
-    // "Gracias" is unreliable but eld returns "es"; "Hi" is too short
-    // for any signal and may return "" → null. Either is acceptable;
-    // the contract is "string-or-null, never an unrelated guess".
-    const gracias = detectLanguage({ ...base, title: "Gracias", description: "" });
-    expect(gracias === "es" || gracias === null).toBe(true);
+    // Pin the deterministic case: eld v2/extrasmall on "Gracias"
+    // returns "es" (unreliable). A future eld bump that drops short-
+    // Latin guesses entirely IS the regression we want surfaced —
+    // a `expect(... || null)` disjunction would silently let it slide.
+    expect(detectLanguage({ ...base, title: "Gracias", description: "" })).toBe(
+      "es"
+    );
   });
 
   it("CJK script fallback overrides eld for short mixed-script titles", () => {
@@ -195,6 +197,48 @@ describe("detectLanguage", () => {
         description: "",
       })
     ).toBe("ko");
+  });
+
+  it("script fallback handles mixed Hangul + Latin (Korean analog of 极海Channel)", () => {
+    // Same mixed-script class as the captured "极海Channel" failure
+    // — short text where eld might pick the Latin word and miss the
+    // Hangul evidence.
+    expect(
+      detectLanguage({ ...base, title: "K-Pop 프로그래밍", description: "" })
+    ).toBe("ko");
+    // Japanese mixed-script with kana (the Japanese-disambiguator)
+    // resolves to ja even when adjacent to Latin words. Pure-kanji
+    // text without kana would resolve to zh — that's a documented
+    // limitation of the script heuristic, not a regression.
+    expect(
+      detectLanguage({ ...base, title: "Gaming プログラミング講座", description: "" })
+    ).toBe("ja");
+  });
+
+  it("script fallback fires on description-only signal (no title)", () => {
+    // The detection runs on `title + description` so a video with no
+    // title and a Chinese description should still resolve to zh. Pins
+    // the concatenation behavior; without this, a future refactor
+    // could accidentally restrict detection to title only.
+    expect(
+      detectLanguage({
+        ...base,
+        title: "",
+        description: "这是一段中文描述",
+      })
+    ).toBe("zh");
+  });
+
+  it.each([
+    ["whitespace only", "   \t\n  "],
+    ["digits only", "12345"],
+    ["punctuation only", "!!!???..."],
+    ["emoji only", "🔥🔥🔥"],
+  ])("returns null for %s (no detectable language signal)", (_label, title) => {
+    // None of these contain Han / kana / Hangul, and eld returns ""
+    // (no detection) for content-free input. Pin null rather than
+    // letting eld's behavior on novel inputs drift through.
+    expect(detectLanguage({ ...base, title, description: "" })).toBeNull();
   });
 
   it("falls through to text detection when the sole subtitle key is unnormalizable", () => {

@@ -65,6 +65,7 @@ describe("POST /metadata", () => {
   });
 
   it("returns 200 with language, title, description, duration, availableCaptions on happy path", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
       title: "Comment apprendre",
       description: "Une vidéo en français",
@@ -83,6 +84,14 @@ describe("POST /metadata", () => {
     expect(body.description).toBe("Une vidéo en français");
     expect(body.duration).toBe(893);
     expect(body.availableCaptions).toEqual(expect.arrayContaining(["fr", "en"]));
+    // The fallback warn must NOT fire on the happy path — a refactor
+    // that always logs (e.g. moves the warn outside the null branch)
+    // would silently flood ops dashboards with false-positive miss
+    // signals and make the dashboards useless for real regressions.
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining("LANGUAGE_DETECT_FALLBACK"),
+      expect.anything()
+    );
   });
 
   it("forwards duration=null (live streams) without coercing to 0", async () => {
