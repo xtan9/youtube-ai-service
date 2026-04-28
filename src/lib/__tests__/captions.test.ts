@@ -191,7 +191,12 @@ describe("decodeCaptionEntities", () => {
 
 describe("fetchCaptions", () => {
   beforeEach(() => {
+    // vitest 4 changed `vi.restoreAllMocks()` to no longer clear mock call
+    // history (only restores `vi.spyOn` originals). Call `vi.clearAllMocks()`
+    // explicitly so `mock.calls[0]` refers to THIS test's call, not a
+    // previous test's leftover.
     vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   // The library types fetchTranscript as returning TranscriptSegment[],

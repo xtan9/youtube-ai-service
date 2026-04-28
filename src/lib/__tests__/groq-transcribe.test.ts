@@ -54,7 +54,12 @@ describe("transcribeViaGroq", () => {
   });
 
   afterEach(() => {
+    // vitest 4 changed `vi.restoreAllMocks()` to no longer clear mock call
+    // history (it only restores `vi.spyOn` originals now). Call
+    // `vi.clearAllMocks()` explicitly so the next test's `toHaveBeenCalled`
+    // checks see only that test's calls.
     vi.restoreAllMocks();
+    vi.clearAllMocks();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
