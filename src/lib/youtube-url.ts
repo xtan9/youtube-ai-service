@@ -29,7 +29,6 @@ export function isYoutubeUrl(url: string): boolean {
 }
 
 export const youtubeUrlSchema = z
-  .string()
   .url()
   .refine(isYoutubeUrl, {
     message: "URL must be a YouTube URL",
