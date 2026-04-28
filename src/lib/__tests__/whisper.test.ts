@@ -112,7 +112,12 @@ describe("buildWhisperArgs", () => {
     // wrong-language anchor would actively reintroduce the drift.
     const args = buildWhisperArgs("/tmp/audio.mp3", "cy");
     expect(args).toContain("--language");
-    expect(args.indexOf("--condition_on_previous_text")).toBeGreaterThan(-1);
+    const condIdx = args.indexOf("--condition_on_previous_text");
+    expect(condIdx).toBeGreaterThan(-1);
+    // Pin the value, not just the flag — a regression that flipped this
+    // to "True" would still satisfy a presence-only check while
+    // re-enabling the drift propagation.
+    expect(args[condIdx + 1]).toBe("False");
     expect(args).not.toContain("--initial_prompt");
   });
 });

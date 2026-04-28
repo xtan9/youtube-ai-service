@@ -128,6 +128,12 @@ describe("transcribeViaGroq", () => {
     // native-language anchor, not the prior English-default fallback or
     // an empty placeholder.
     expect(prompt as string).toMatch(/[一-鿿]/);
+    // Executable comment: Groq's hosted Whisper does not expose
+    // `condition_on_previous_text`, so we must NOT send a field with
+    // that name. A future engineer might assume it works and silently
+    // bloat the multipart body for no effect — pin the absence so a
+    // copy-paste from the local-Whisper fix can't slip in.
+    expect(formData.get("condition_on_previous_text")).toBeNull();
   });
 
   it("omits `prompt` when no lang is provided (no language to anchor to)", async () => {

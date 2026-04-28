@@ -9,7 +9,11 @@ const MIN_TEXT_DETECTION_LENGTH = 30;
 // YouTube caption tracks use). Only languages with concrete 639-1 mappings —
 // unlisted 639-3 codes pass through unchanged so the caller can log and
 // fall through to the ultimate fallback rather than silently lying.
-const ISO_639_3_TO_1: Record<string, string> = {
+//
+// Exported as a const for cross-module parity tests (every 639-1 value
+// here must have a matching anchor in language-prompt.ts). Not intended
+// for runtime mutation.
+export const ISO_639_3_TO_1: Record<string, string> = {
   eng: "en",
   cmn: "zh",
   fra: "fr",
