@@ -49,8 +49,30 @@ export class GroqTranscribeError extends Error {
 }
 
 const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
-const DEFAULT_MODEL = "whisper-large-v3-turbo";
-const DEFAULT_TIMEOUT_MS = 120_000;
+// `whisper-large-v3` is more robust than `-turbo` against the
+// long-silent-stretch hallucination class that survived the prior
+// anchor-prompt fix on its own (a 25s silent gap between Chinese
+// speech segments on hrREdNm7vB4 still produced English
+// hallucinations even with the native-language anchor pinned). Turbo
+// is a distilled / faster model — the speed savings aren't worth
+// shipping nonsense English mid-Chinese-audio. `GROQ_MODEL` env var
+// override is preserved for a future ops decision that wants the
+// speed back; in that case bump `GROQ_TIMEOUT_MS` accordingly because
+// large-v3 is roughly 2-3x slower than turbo per minute of audio
+// and our default timeout was bumped to 180s on this PR to absorb
+// that.
+const DEFAULT_MODEL = "whisper-large-v3";
+// 180s default (was 120s on turbo). large-v3 takes longer per
+// minute of audio so a 14-18 min clip that previously completed in
+// ~40-60s can now spend 90-120s — and a Groq queue spike pushes that
+// over the prior 120s budget, surfacing as a "timeout" GroqTranscribeError
+// the route then 503s when audioSeconds > GROQ_LOCAL_FALLBACK_MAX_SECONDS.
+// Keeping the timeout flush with the prior turbo budget would shift
+// some "drift hallucination" cases into "503 timeout" cases — the
+// drift fix is the whole point of this change, don't undo it via
+// timeout. Still well under the frontend's 240s VPS_TIMEOUT_MS
+// default.
+const DEFAULT_TIMEOUT_MS = 180_000;
 const RETRY_BACKOFF_MS = 2_000;
 
 export async function transcribeViaGroq(
@@ -119,14 +141,14 @@ export async function transcribeViaGroq(
         // Native-language anchor biases the model toward the target
         // language even on non-speech audio (silence/music/B-roll
         // between sentences) where `language` alone isn't enough.
-        // Without this, whisper-large-v3-turbo on Groq hallucinates
-        // English (and even other languages — French "même" was
-        // observed) during low-speech segments and propagates the
-        // drift across subsequent chunks. Captured on video
-        // hrREdNm7vB4 where ~46% of a Chinese audio's segments came
-        // back as nonsense non-Chinese despite `language=zh`. Groq's
-        // hosted Whisper does not expose `condition_on_previous_text`,
-        // so `prompt` is the only available lever for this drift.
+        // Without this, Groq's hosted Whisper hallucinates English
+        // (and even other languages — French "même" was observed)
+        // during low-speech segments and propagates the drift across
+        // subsequent chunks. Captured on video hrREdNm7vB4 where ~46%
+        // of a Chinese audio's segments came back as nonsense
+        // non-Chinese despite `language=zh`. Groq's hosted Whisper
+        // does not expose `condition_on_previous_text`, so `prompt` is
+        // the only available lever for this drift.
         const anchor = getLanguageAnchorPrompt(lang);
         if (anchor) body.append("prompt", anchor);
       }

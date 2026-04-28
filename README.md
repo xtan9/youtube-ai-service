@@ -6,7 +6,7 @@ Lightweight transcription microservice. Part of the YouTube AI Chat stack.
 
 - `POST /metadata` — Extract video metadata (title, description, detected language, duration in seconds or `null`, available caption track codes) via `yt-dlp --dump-json`. Call this first so the orchestrator can pin caption + whisper language and avoid the default "pick tracks[0]" bug that produced wrong-language transcripts. `duration` lets callers fail fast on videos too long for the no-captions Whisper fallback to finish inside `VPS_TIMEOUT_MS`.
 - `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional `lang` (ISO 639-1 or BCP-47) that forwards to `youtube-transcript-plus` so a specific caption track is selected. Returns 200 with `{ transcript, source, language, title, channelName }` or 404 `{ error: "no_captions" }` if the track isn't available. Much cheaper than transcription — call this before `/transcribe`.
-- `POST /transcribe` — Transcribe a YouTube video's audio. Primary path: download audio via yt-dlp, then post to [Groq](https://groq.com)'s `whisper-large-v3-turbo`. Falls back to local `whisper-ctranslate2` for audio ≤ `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (default 180s) when Groq fails. Returns 503 when Groq fails and audio is over the fallback cap. Accepts an optional `lang` (ISO 639-1 / BCP-47) forwarded to whichever backend handles the request.
+- `POST /transcribe` — Transcribe a YouTube video's audio. Primary path: download audio via yt-dlp, then post to [Groq](https://groq.com)'s `whisper-large-v3`. Falls back to local `whisper-ctranslate2` for audio ≤ `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (default 180s) when Groq fails. Returns 503 when Groq fails and audio is over the fallback cap. Accepts an optional `lang` (ISO 639-1 / BCP-47) forwarded to whichever backend handles the request.
 - `GET /health` — Health check (unauthenticated).
 
 All data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
@@ -15,7 +15,7 @@ All data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
 
 - `VPS_API_KEY` (required) — Bearer token clients must present.
 - `GROQ_API_KEY` (required for primary transcription path) — when unset, the service silently falls through to local Whisper at any audio length.
-- `GROQ_MODEL` (optional, default `whisper-large-v3-turbo`).
+- `GROQ_MODEL` (optional, default `whisper-large-v3`). Set to `whisper-large-v3-turbo` to trade accuracy for speed; the default favours accuracy because turbo hallucinates more on long silent stretches.
 - `GROQ_TIMEOUT_MS` (optional, default 120000).
 - `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (optional, default 180) — audio cap above which we 503 instead of falling back to local Whisper after a Groq failure.
 - `TS_AUTHKEY`, `TS_EXIT_NODE_HOSTNAME` — Tailscale exit-node config.
