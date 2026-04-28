@@ -89,6 +89,25 @@ describe("transcribeViaGroq", () => {
     expect(formData.get("response_format")).toBe("verbose_json");
   });
 
+  it("uses GROQ_MODEL env var to override the default model", async () => {
+    // The README actively recommends `GROQ_MODEL=whisper-large-v3-turbo`
+    // for ops who want speed back. A typo in the env-read path
+    // (`process.env.GROQ_MODEL || DEFAULT_MODEL`) would silently ignore
+    // that override and pin every prod request to large-v3 regardless
+    // — the kind of regression that's invisible until billing or
+    // p95-latency dashboards surface it weeks later. Pin the override
+    // here so a future refactor can't break it.
+    vi.stubEnv("GROQ_MODEL", "whisper-large-v3-turbo");
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip.mp3", "en");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const formData = init.body as FormData;
+    expect(formData.get("model")).toBe("whisper-large-v3-turbo");
+  });
+
   it("omits `language` from the form when no lang arg is provided", async () => {
     // Sending `language: undefined` would be rejected by Groq's strict
     // multipart parser (some shapes return 400, some silently ignore).

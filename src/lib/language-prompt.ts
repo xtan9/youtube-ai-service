@@ -19,14 +19,14 @@
 // hallucination pattern: training data contains many "the following
 // is a sentence in <language>" prompts (TTS / ASR datasets), and
 // during long silent stretches Whisper regurgitates that exact
-// phrasing. Captured on the post-#23 verification of hrREdNm7vB4: a
-// segment at 194.03s was literally "The following is a sentence in
-// English." — the model echoed our own English anchor template
-// rather than producing native content. A natural-content opener
-// doesn't appear verbatim in training prompts the same way and is
-// less prone to regurgitation. The opener form also better matches
-// actual YouTube content (intros, podcasts) so the language
-// fingerprint is closer to the audio's own distribution.
+// phrasing. Verified on hrREdNm7vB4: a segment at 194.03s was
+// literally "The following is a sentence in English." — the model
+// echoed our own English anchor template rather than producing
+// native content. A natural-content opener doesn't appear verbatim
+// in training prompts the same way and is less prone to
+// regurgitation. The opener form also better matches actual YouTube
+// content (intros, podcasts) so the language fingerprint is closer
+// to the audio's own distribution.
 //
 // All entries fit comfortably under Whisper's 224-token prompt cap.
 // Only ISO 639-1 codes that detectLanguage() can return are listed;

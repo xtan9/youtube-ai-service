@@ -91,30 +91,69 @@ describe("getLanguageAnchorPrompt", () => {
     expect(prompt).toMatch(/[؀-ۿ]/);
   });
 
-  it("no anchor matches Whisper's documented meta-template hallucination pattern", () => {
-    // Regression guard for the post-#23 finding: the prior anchor form
-    // ("The following is a sentence in <X>") matched a Whisper
-    // training-data prompt template, and during long silent stretches
-    // the model regurgitated that exact phrasing as transcript output
-    // — segment 194.03s on hrREdNm7vB4 came back as literally "The
-    // following is a sentence in English." Anchors must be natural
-    // content openers, not meta-templates, so the failure mode shifts
-    // from "obvious meta-phrase" to "plausible video content" if
-    // regurgitation does occur. Iterate ISO_639_3_TO_1 (plus "en") so
-    // a future PR that adds a new anchor with the bad pattern fails
-    // here instead of silently re-introducing the bug.
+  it("no anchor matches the meta-template hallucination pattern in any language", () => {
+    // Regression guard. The previous anchor form ("The following is a
+    // sentence in <X>") matched a Whisper training-data prompt
+    // template; during long silent stretches the model regurgitated
+    // that exact phrasing as transcript output (verified on
+    // hrREdNm7vB4 — segment 194.03s came back as literally "The
+    // following is a sentence in English."). Anchors must be natural
+    // content openers, not meta-templates.
+    //
+    // Catches three regression paths:
+    //  1. The literal English phrase reappears.
+    //  2. A future contributor regenerates anchors via an LLM and the
+    //     result is the *translated* form of the bad template — the
+    //     original PR forms ("以下是普通话的句子", "Lo siguiente es una
+    //     oración en español", "ما يلي هو جملة باللغة العربية") would
+    //     all pass an English-only check but reintroduce the same
+    //     bug class. Reject the per-language prefix forms too.
+    //  3. A new language is added without an anchor (parity guard).
     const codes = new Set<string>([...Object.values(ISO_639_3_TO_1), "en"]);
+    // Native-language openings of "the following is..." / "the
+    // next..." / "below is...". Conservative subset — rejects the
+    // exact prior PR forms, leaves room for genuinely natural
+    // sentences that happen to start with similar tokens. Lowercased
+    // before match.
+    const banned = [
+      "the following is a sentence",
+      "the following is",
+      "以下是普通话",
+      "以下は",
+      "다음은",
+      "lo siguiente es",
+      "ce qui suit",
+      "il seguente è",
+      "a seguir está",
+      "het volgende is",
+      "следующее ",
+      "ما يلي ",
+      "להלן ",
+      "aşağıdaki ",
+      "sau đây là",
+      "berikut adalah",
+      "ต่อไปนี้",
+      "poniżej znajduje się",
+      "це речення",
+      "följande är",
+      "følgende er",
+      "seuraava on",
+      "následuje věta",
+      "το ακόλουθο",
+      "următoarea este",
+      "a következő",
+      "यह हिंदी में एक वाक्य",
+    ];
     for (const code of codes) {
       const prompt = getLanguageAnchorPrompt(code);
       expect(prompt, `null anchor for ${code}`).toBeTruthy();
-      // The English-typed phrasing is what Whisper's training data
-      // contains — guarding the literal pattern keeps non-English
-      // anchors out too if a future contributor copy-pastes the form
-      // and translates word-for-word.
-      expect(
-        prompt!.toLowerCase().includes("the following is a sentence"),
-        `${code} anchor uses the documented regurgitation template`
-      ).toBe(false);
+      const lower = prompt!.toLowerCase();
+      for (const phrase of banned) {
+        expect(
+          lower.includes(phrase),
+          `${code} anchor matches the banned meta-template phrase "${phrase}"`
+        ).toBe(false);
+      }
     }
   });
 });
