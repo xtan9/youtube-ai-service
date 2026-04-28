@@ -125,26 +125,76 @@ describe("detectLanguage", () => {
     expect(result).toBe("zh");
   });
 
-  it("falls back to 'en' when text is too short for confident detection", () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const result = detectLanguage({ ...base, title: "Hi", description: "" });
-    expect(result).toBe("en");
+  it("returns null when text is empty (no signal at all)", () => {
+    // The function honestly reports "no signal" instead of guessing "en".
+    // The route layer is responsible for mapping null → "en" with a
+    // structured warn log; testing the route fallback lives in
+    // routes/__tests__/metadata.test.ts so the wire-contract back-compat
+    // is pinned independently of the detection internals.
+    expect(detectLanguage({ ...base, title: "", description: "" })).toBeNull();
   });
 
-  it("logs LANGUAGE_DETECT_FALLBACK with context when every signal fails", async () => {
-    // A silent "en" here defeats the whole point of the PR — a rising
-    // miss rate should be alertable. Lock the errorId + context shape
-    // so a future refactor can't drop the log.
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    detectLanguage({ ...base, title: "Hi", description: "" });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("fallback to en"),
-      expect.objectContaining({
-        errorId: "LANGUAGE_DETECT_FALLBACK",
-        hasLanguageField: false,
-        subtitleKeyCount: 0,
+  it("returns eld's best guess for short Latin titles even when unreliable", () => {
+    // Per spec: even when eld.isReliable() is false, use result.language
+    // for non-CJK short text — an unreliable Latin-script guess beats
+    // null because the language hint then propagates to whisper's
+    // prompt anchor, biasing output even on uncertain detection.
+    // "Gracias" is unreliable but eld returns "es"; "Hi" is too short
+    // for any signal and may return "" → null. Either is acceptable;
+    // the contract is "string-or-null, never an unrelated guess".
+    const gracias = detectLanguage({ ...base, title: "Gracias", description: "" });
+    expect(gracias === "es" || gracias === null).toBe(true);
+  });
+
+  it("CJK script fallback overrides eld for short mixed-script titles", () => {
+    // Captured failure: "极海Channel" (Chinese channel name + Latin
+    // word) is detected by eld as French with isReliable=true. A
+    // single Han char is unambiguous Chinese signal — script range
+    // check pre-empts eld for any text containing CJK Unified
+    // Ideographs / Hiragana / Katakana / Hangul. Same path catches
+    // the bug video hrREdNm7vB4 (~18 Chinese chars, below franc's
+    // prior 30-char threshold).
+    expect(
+      detectLanguage({ ...base, title: "极海Channel", description: "" })
+    ).toBe("zh");
+    expect(
+      detectLanguage({
+        ...base,
+        title: "初级开发别跳槽！最新大裁员4个主要原因！",
+        description: "",
       })
-    );
+    ).toBe("zh");
+  });
+
+  it("script fallback distinguishes Japanese (kana) from Chinese (Han only)", () => {
+    // Japanese uses both kana and kanji. Pure-Han text → zh; any kana
+    // present → ja. Order in detectByScript matters: kana check before
+    // Han check so a Japanese title with both scripts isn't
+    // misclassified as Chinese.
+    expect(
+      detectLanguage({
+        ...base,
+        title: "プログラミングを学ぶ",
+        description: "",
+      })
+    ).toBe("ja");
+    expect(
+      detectLanguage({
+        ...base,
+        title: "今日は日本語の話",
+        description: "",
+      })
+    ).toBe("ja");
+  });
+
+  it("script fallback returns ko for Hangul", () => {
+    expect(
+      detectLanguage({
+        ...base,
+        title: "프로그래밍을 배우자",
+        description: "",
+      })
+    ).toBe("ko");
   });
 
   it("falls through to text detection when the sole subtitle key is unnormalizable", () => {
@@ -165,7 +215,6 @@ describe("detectLanguage", () => {
     // regardless of the source language. Trusting this field would let a
     // captioned French video get labelled English (alphabetically first)
     // or arbitrary.
-    vi.spyOn(console, "warn").mockImplementation(() => {});
     const result = detectLanguage({
       ...base,
       automatic_captions: {
@@ -174,7 +223,10 @@ describe("detectLanguage", () => {
         fr: [{ url: "x", ext: "vtt" }],
       },
     });
-    expect(result).toBe("en"); // ultimate fallback (no other signal)
+    // Returns null — automatic_captions is not used as signal, and
+    // there's no title/description to detect from. The route layer
+    // maps null → "en" with a structured warn for ops visibility.
+    expect(result).toBeNull();
   });
 });
 

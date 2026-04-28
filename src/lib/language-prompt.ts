@@ -95,8 +95,9 @@ export function getLanguageAnchorPrompt(lang: string | null | undefined): string
   if (LANGUAGE_ANCHOR_PROMPTS[lower]) return LANGUAGE_ANCHOR_PROMPTS[lower];
   // BCP-47 / 3-letter: extract the primary 2-letter subtag and retry.
   // Mirrors normalizeLanguageCode in language-detect.ts — duplicated
-  // here to keep this module independent of franc-loading transitive
-  // imports, but the regex is intentionally identical.
+  // here to keep this module independent of language-detect's
+  // transitive imports (eld bundle), but the regex is intentionally
+  // identical.
   const match = lower.match(/^([a-z]{2})(?:-.+)?$/);
   if (match) return LANGUAGE_ANCHOR_PROMPTS[match[1]] ?? null;
   return null;

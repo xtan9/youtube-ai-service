@@ -1,18 +1,11 @@
-import { franc } from "franc";
+import { eld } from "eld/extrasmall";
 
-// Minimum character count before we trust franc's output. Below this, franc's
-// trigram model produces noisy results (short text often mis-detects as an
-// exotic language). 30 chars is the library's own documented threshold.
-const MIN_TEXT_DETECTION_LENGTH = 30;
-
-// Codes we map from franc's ISO 639-3 output to ISO 639-1 (what whisper and
-// YouTube caption tracks use). Only languages with concrete 639-1 mappings —
-// unlisted 639-3 codes pass through unchanged so the caller can log and
-// fall through to the ultimate fallback rather than silently lying.
-//
-// Exported as a const for cross-module parity tests (every 639-1 value
-// here must have a matching anchor in language-prompt.ts). Not intended
-// for runtime mutation.
+// Codes the prior franc-based implementation could return as ISO 639-3.
+// Kept as a const for cross-module parity tests (every 639-1 value here
+// must have a matching anchor in language-prompt.ts) and for
+// `normalizeLanguageCode` to translate any 3-letter codes a caller
+// happens to pass through. Not used by the new eld-based detection
+// path — eld returns ISO 639-1 directly.
 export const ISO_639_3_TO_1: Record<string, string> = {
   eng: "en",
   cmn: "zh",
@@ -68,11 +61,12 @@ export interface YtdlpMetadata {
   >;
 }
 
-// yt-dlp / franc sentinels that mean "no linguistic content" or "ambiguous" —
-// forwarding any of these to whisper as `--language zxx` produces a cryptic
-// CLI error. Treat as "no signal" and let callers fall through.
+// yt-dlp / detector sentinels that mean "no linguistic content" or
+// "ambiguous" — forwarding any of these to whisper as `--language zxx`
+// produces a cryptic CLI error. Treat as "no signal" and let callers
+// fall through.
 const LANGUAGE_SENTINELS: ReadonlySet<string> = new Set([
-  "und", // undetermined — franc's "couldn't detect" output
+  "und", // undetermined
   "zxx", // no linguistic content — yt-dlp uses this for music-only tracks
   "mul", // multiple languages
   "mis", // uncoded languages
@@ -105,21 +99,80 @@ export function normalizeLanguageCode(code: string | null | undefined): string |
   return ISO_639_3_TO_1[primary] ?? null;
 }
 
+// Hiragana (぀–ゟ) and Katakana (゠–ヿ) are
+// Japanese-only — not present in Chinese or Korean. Match before Han
+// because Japanese also uses Han chars (kanji), but the presence of
+// even one kana char is unambiguous evidence of Japanese.
+const JAPANESE_KANA_RE = /[぀-ゟ゠-ヿ]/;
+// Hangul syllables (가–힯) and Jamo (ᄀ–ᇿ) are
+// Korean-only.
+const KOREAN_HANGUL_RE = /[가-힯ᄀ-ᇿ]/;
+// CJK Unified Ideographs (一–鿿) — used by Chinese (and
+// Japanese kanji, but kana check above pre-empts that case). Title-
+// only check on the assumption that any presence of Han chars in a
+// short YouTube title strongly suggests Chinese audience targeting,
+// even when mixed with Latin (e.g. "极海Channel" — eld misclassifies
+// this as French; the script check correctly returns zh).
+const HAN_RE = /[一-鿿]/;
+
+/**
+ * Script-based language detection. Returns null when no CJK script
+ * is present so the caller can fall through to eld for Latin / other
+ * scripts. Order matters: kana → ja before han → zh because Japanese
+ * uses both kana and kanji and we want the more specific signal to win.
+ */
+function detectByScript(text: string): string | null {
+  if (JAPANESE_KANA_RE.test(text)) return "ja";
+  if (KOREAN_HANGUL_RE.test(text)) return "ko";
+  if (HAN_RE.test(text)) return "zh";
+  return null;
+}
+
+/**
+ * Detect language from text using eld with a CJK script-range fallback
+ * for short titles. Returns ISO 639-1 or null. Trusts eld even when
+ * `isReliable()` returns false — for short Latin titles like "Hello"
+ * or "Gracias" the unreliable detection is still better than a "no
+ * signal" null that forces callers into a bare auto-detect on the
+ * audio path. eld's empty-string return (no detection at all) maps to
+ * null so the caller can decide.
+ *
+ * Script detection runs *before* eld for CJK text because eld gets
+ * confused by short mixed-script titles — "极海Channel" is detected as
+ * French with isReliable=true, but a single Han char is unambiguous
+ * Chinese signal. Matches the bug class captured on hrREdNm7vB4 where
+ * the title (~18 Chinese chars) was below franc's 30-char threshold
+ * and fell through to the "en" fallback.
+ */
+function detectFromText(text: string): string | null {
+  if (!text.trim()) return null;
+  const fromScript = detectByScript(text);
+  if (fromScript) return fromScript;
+  const result = eld.detect(text);
+  // Per spec: trust eld.language even when isReliable() is false —
+  // unreliable Latin-script detection beats null for our use case
+  // because the language hint then propagates to whisper's prompt
+  // anchor, which biases output even on uncertain detection.
+  const normalized = normalizeLanguageCode(result.language);
+  return normalized;
+}
+
 /**
  * Derive the video's language from yt-dlp metadata. Priority order:
  *   1. `language` field (uploader-specified, authoritative).
  *   2. Sole manually-uploaded subtitle track (2+ tracks is ambiguous — a
  *      French-source uploader often ships fr + en, and picking one
  *      arbitrarily reintroduces the tracks[0] bug class).
- *   3. Text detection on description + title via franc (heuristic fallback).
- *   4. `"en"` ultimate fallback, with a warn log so a high miss rate is
- *      observable in production (a rising rate is a detection-quality
- *      regression or a corpus of metadata-sparse videos we should fix).
+ *   3. Text detection (CJK script range → eld) on title + description.
+ *   4. Returns null when every signal failed — callers should log and
+ *      decide. Ultimate-fallback "en" lives in the route layer, not
+ *      here, so the function honestly reports "no signal" instead of
+ *      lying with a guess.
  *
- * `automatic_captions` is NOT used as a signal — YouTube populates it with
- * many auto-translations regardless of source language.
+ * `automatic_captions` is NOT used as a signal — YouTube populates it
+ * with many auto-translations regardless of source language.
  */
-export function detectLanguage(metadata: YtdlpMetadata): string {
+export function detectLanguage(metadata: YtdlpMetadata): string | null {
   const fromLanguage = normalizeLanguageCode(metadata.language);
   if (fromLanguage) return fromLanguage;
 
@@ -132,24 +185,7 @@ export function detectLanguage(metadata: YtdlpMetadata): string {
   }
 
   const text = `${metadata.title ?? ""} ${metadata.description ?? ""}`.trim();
-  let francResult: string | null = null;
-  if (text.length >= MIN_TEXT_DETECTION_LENGTH) {
-    francResult = franc(text);
-    const normalized = normalizeLanguageCode(francResult);
-    if (normalized) return normalized;
-  }
-
-  // Everything failed. Log the fallback so a rising miss rate is alertable —
-  // a silent "en" here defeats the PR's purpose of pinning the right
-  // language to whisper.
-  console.warn("[language-detect] fallback to en (no usable signal)", {
-    errorId: "LANGUAGE_DETECT_FALLBACK",
-    hasLanguageField: Boolean(metadata.language),
-    subtitleKeyCount: subtitleKeys.length,
-    textLength: text.length,
-    francResult,
-  });
-  return "en";
+  return detectFromText(text);
 }
 
 /**
