@@ -96,10 +96,12 @@ describe("buildWhisperArgs", () => {
 
   it("omits both drift mitigations when no lang is provided (back-compat)", () => {
     // Callers that don't pass a lang must see the same argv they
-    // always have, so whisper's auto-detect runs unmodified. A stray
-    // condition_on_previous_text=False on the no-lang path would
-    // change behaviour for legitimately mixed-language clips that this
-    // PR isn't trying to address.
+    // always have, so whisper's auto-detect runs unmodified. Without a
+    // pinned target language there's nothing for the model to drift
+    // *away from* — the failure mode this PR addresses doesn't exist
+    // on the no-lang path, and keeping auto-detect's defaults intact
+    // avoids changing behavior for callers that never opted into a
+    // language hint in the first place.
     const args = buildWhisperArgs("/tmp/audio.mp3");
     expect(args).not.toContain("--condition_on_previous_text");
     expect(args).not.toContain("--initial_prompt");
