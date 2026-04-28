@@ -7,6 +7,7 @@ import {
 } from "./audio-compress.js";
 import type { AudioCompressKind } from "./audio-compress.js";
 import type { TranscriptSegment } from "./captions.js";
+import { getLanguageAnchorPrompt } from "./language-prompt.js";
 
 // Subset of Groq's `verbose_json` response we consume. Groq's full shape
 // includes word-level timestamps and per-segment confidence; ignoring them
@@ -113,7 +114,22 @@ export async function transcribeViaGroq(
       );
       body.append("model", model);
       body.append("response_format", "verbose_json");
-      if (lang) body.append("language", lang);
+      if (lang) {
+        body.append("language", lang);
+        // Native-language anchor biases the model toward the target
+        // language even on non-speech audio (silence/music/B-roll
+        // between sentences) where `language` alone isn't enough.
+        // Without this, whisper-large-v3-turbo on Groq hallucinates
+        // English (and even other languages — French "même" was
+        // observed) during low-speech segments and propagates the
+        // drift across subsequent chunks. Captured on video
+        // hrREdNm7vB4 where ~46% of a Chinese audio's segments came
+        // back as nonsense non-Chinese despite `language=zh`. Groq's
+        // hosted Whisper does not expose `condition_on_previous_text`,
+        // so `prompt` is the only available lever for this drift.
+        const anchor = getLanguageAnchorPrompt(lang);
+        if (anchor) body.append("prompt", anchor);
+      }
       return body;
     };
 

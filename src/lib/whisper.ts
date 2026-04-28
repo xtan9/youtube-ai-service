@@ -3,6 +3,7 @@ import { readFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join, basename } from "path";
 import type { TranscriptSegment } from "./captions.js";
+import { getLanguageAnchorPrompt } from "./language-prompt.js";
 
 export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
   const args = [
@@ -34,6 +35,26 @@ export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
   // still the safer default when confidence is low.
   if (lang) {
     args.push("--language", lang);
+    // Disable previous-chunk conditioning when a language is pinned.
+    // Default is True, which carries forward whisper's last-window output
+    // as context for the next window. Once whisper hallucinates a token
+    // in the wrong language during a non-speech segment (silence between
+    // sentences, background music, B-roll), that hallucination
+    // propagates through subsequent chunks until strong native audio
+    // resets it — captured on video hrREdNm7vB4 where ~46% of a Chinese
+    // audio's segments came back as nonsense English with `--language
+    // zh` pinned. Disabling the conditioning keeps each window
+    // independent so a single bad chunk can't cascade.
+    args.push("--condition_on_previous_text", "False");
+    // Native-language anchor sentence biases whisper's output
+    // distribution toward the target language for low-confidence
+    // segments where `--language` alone isn't enough. Only set when we
+    // have an anchor for this code; otherwise fall through to flag-only
+    // pinning (the prior behavior — strictly additive guard).
+    const anchor = getLanguageAnchorPrompt(lang);
+    if (anchor) {
+      args.push("--initial_prompt", anchor);
+    }
   }
   return args;
 }

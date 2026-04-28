@@ -103,6 +103,68 @@ describe("transcribeViaGroq", () => {
     expect(formData.get("language")).toBeNull();
   });
 
+  it("sends a native-language `prompt` alongside `language` so the model doesn't drift", async () => {
+    // Captured on video hrREdNm7vB4: with only `language=zh`, Groq's
+    // whisper-large-v3-turbo hallucinated English (and French "même")
+    // during non-speech segments and propagated through subsequent
+    // chunks via the model's internal prev-text conditioning. Groq's
+    // hosted Whisper does not expose `condition_on_previous_text`, so
+    // the `prompt` form field is the only available lever — a short
+    // native-language anchor biases the output distribution every chunk
+    // and stops the drift. Test asserts the anchor is non-empty and in
+    // the target language so a future refactor can't drop the field
+    // back to Whisper-default behavior.
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip.mp3", "zh");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const formData = init.body as FormData;
+    const prompt = formData.get("prompt");
+    expect(typeof prompt).toBe("string");
+    expect(prompt).toBeTruthy();
+    // Anchor must contain CJK characters when lang=zh — proves it's a
+    // native-language anchor, not the prior English-default fallback or
+    // an empty placeholder.
+    expect(prompt as string).toMatch(/[一-鿿]/);
+    // Executable comment: Groq's hosted Whisper does not expose
+    // `condition_on_previous_text`, so we must NOT send a field with
+    // that name. A future engineer might assume it works and silently
+    // bloat the multipart body for no effect — pin the absence so a
+    // copy-paste from the local-Whisper fix can't slip in.
+    expect(formData.get("condition_on_previous_text")).toBeNull();
+  });
+
+  it("omits `prompt` when no lang is provided (no language to anchor to)", async () => {
+    // Without a target language we can't pick an anchor — sending an
+    // English prompt would bias auto-detect toward English, the exact
+    // failure mode we're trying to fix.
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip.mp3");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const formData = init.body as FormData;
+    expect(formData.get("prompt")).toBeNull();
+  });
+
+  it("omits `prompt` for a lang we have no anchor for (falls through to language-only pinning)", async () => {
+    // Strictly additive guard: an unknown ISO 639-1 code (Welsh, etc.)
+    // skips the prompt rather than sending a wrong-language anchor that
+    // would actively *cause* the bug we're fixing.
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip.mp3", "cy");
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const formData = init.body as FormData;
+    expect(formData.get("language")).toBe("cy");
+    expect(formData.get("prompt")).toBeNull();
+  });
+
   it("retries once on 429 with backoff and succeeds on the second attempt", async () => {
     vi.useFakeTimers();
     const fetchMock = vi
