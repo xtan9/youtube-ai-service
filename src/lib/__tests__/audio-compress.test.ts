@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as childProcess from "child_process";
 import * as fsPromises from "fs/promises";
 import * as os from "os";
+import { basename } from "path";
 import {
   compressForGroq,
   cleanupCompressed,
@@ -86,7 +87,7 @@ describe("compressForGroq", () => {
 
     const out = await compressForGroq("/tmp/src.mp3");
 
-    expect(out).toMatch(/^.+\/groq-[0-9a-f-]+\.mp3$/);
+    expect(basename(out)).toMatch(/^groq-[0-9a-f-]+\.mp3$/);
     expect(out.startsWith(os.tmpdir())).toBe(true);
     expect(mockedExecFile.mock.calls).toHaveLength(1);
     const [cmd, args, opts] = mockedExecFile.mock.calls[0] as unknown as [
@@ -168,8 +169,8 @@ describe("compressForGroq", () => {
     await compressForGroq("/tmp/src.mp3").catch(() => undefined);
 
     expect(mockedUnlink).toHaveBeenCalledTimes(1);
-    expect(mockedUnlink.mock.calls[0]?.[0]).toMatch(
-      /^.+\/groq-[0-9a-f-]+\.mp3$/
+    expect(basename(String(mockedUnlink.mock.calls[0]?.[0]))).toMatch(
+      /^groq-[0-9a-f-]+\.mp3$/
     );
   });
 
