@@ -28,7 +28,11 @@ function read(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-describe("update-env.sh", () => {
+// This script deploys only to Linux. Git Bash on Windows does not reliably
+// release flock-backed file handles before the process exits, which makes
+// cleanup fail and can expose different empty-file behavior. Linux CI still
+// runs every case; Windows developers can run the rest of the suite cleanly.
+describe.skipIf(process.platform === "win32")("update-env.sh", () => {
   let repo: string;
   let script: string;
   let envPath: string;
