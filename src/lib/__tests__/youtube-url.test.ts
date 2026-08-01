@@ -22,6 +22,10 @@ describe("isYoutubeUrl", () => {
     "ftp://youtube.com/file",
     "https://phishing-youtube.com/watch?v=x",
     "https://youtube.com.phish.example/",
+    "https://www.youtube.com/",
+    "https://www.youtube.com/watch",
+    "https://www.youtube.com/watch?v=short",
+    "https://youtu.be/short",
     // typosquats
     "https://youtub.com/watch?v=x",
     "https://youtube-com.net/",

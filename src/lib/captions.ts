@@ -8,6 +8,7 @@ import {
   type TranscriptResult,
   type TranscriptSegment as YtTranscriptSegment,
 } from "youtube-transcript-plus";
+import { logServiceEvent } from "./observability.js";
 
 // Caption fetching must run from an IP YouTube classifies as residential —
 // datacenter IPs get caption-track URLs stripped from the watch-page
@@ -159,13 +160,15 @@ export function isExpectedNoCaptions(err: unknown): boolean {
 // audit miss rate and decide whether to add ja/ko/etc.
 export function pickLocale(
   segments: readonly YtTranscriptSegment[],
-  videoId?: string
+  videoId?: string,
+  requestId?: string
 ): PromptLocale {
   const lang = segments[0]?.lang ?? "";
   const normalized = lang.toLowerCase();
   if (normalized.startsWith("zh")) return "zh";
   if (!normalized.startsWith("en") && normalized !== "") {
-    console.warn("[captions] unknown locale falling back to en", {
+    logServiceEvent("warn", "captions.unknown_locale", {
+      requestId,
       videoId,
       lang,
     });
@@ -188,7 +191,8 @@ export function pickLocale(
  */
 export async function fetchCaptions(
   youtubeUrl: string,
-  lang?: string
+  lang?: string,
+  requestId?: string
 ): Promise<CaptionResult | null> {
   const videoId = extractVideoId(youtubeUrl);
   if (!videoId) return null;
@@ -208,12 +212,13 @@ export async function fetchCaptions(
     if (lang && err instanceof YoutubeTranscriptNotAvailableLanguageError) {
       const matched = findSubtagMatch(lang, err.availableLangs);
       if (!matched) return null;
-      console.warn("[captions] CAPTION_LANG_RETRY_PRIMARY_SUBTAG", {
+      logServiceEvent("warn", "captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG", {
         errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
+        requestId,
         videoId,
         requested: lang,
         matched,
-        available: err.availableLangs,
+        availableCount: err.availableLangs.length,
       });
       try {
         const retryResponse = await fetchTranscript(videoId, {
@@ -223,14 +228,14 @@ export async function fetchCaptions(
         result = retryResponse as TranscriptResult;
       } catch (retryErr) {
         if (isExpectedNoCaptions(retryErr)) return null;
-        console.error("[captions] CAPTION_UNEXPECTED_FAILURE", {
+        logServiceEvent("error", "captions.CAPTION_UNEXPECTED_FAILURE", {
           errorId: "CAPTION_UNEXPECTED_FAILURE",
+          requestId,
           videoId,
           errorClass:
             retryErr instanceof Error
               ? retryErr.constructor.name
               : typeof retryErr,
-          err: retryErr,
           originalLang: lang,
           retryLang: matched,
         });
@@ -239,11 +244,11 @@ export async function fetchCaptions(
     } else if (isExpectedNoCaptions(err)) {
       return null;
     } else {
-      console.error("[captions] CAPTION_UNEXPECTED_FAILURE", {
+      logServiceEvent("error", "captions.CAPTION_UNEXPECTED_FAILURE", {
         errorId: "CAPTION_UNEXPECTED_FAILURE",
+        requestId,
         videoId,
         errorClass: err instanceof Error ? err.constructor.name : typeof err,
-        err,
       });
       throw err;
     }
@@ -256,8 +261,9 @@ export async function fetchCaptions(
     // shift ("segments array now lives under .tracks") could hit this
     // path silently. Log so a rising rate is detectable before a wave
     // of unnecessary Whisper fallbacks hits the compute bill.
-    console.warn("[captions] empty segments array, treating as no_captions", {
+    logServiceEvent("warn", "captions.empty_segments", {
       errorId: "CAPTION_EMPTY_SEGMENTS",
+      requestId,
       videoId,
     });
     return null;
@@ -276,8 +282,9 @@ export async function fetchCaptions(
     }));
 
   if (segments.length === 0) {
-    console.warn("[captions] whitespace-only transcript, treating as no_captions", {
+    logServiceEvent("warn", "captions.empty_transcript", {
       errorId: "CAPTION_EMPTY_TRANSCRIPT",
+      requestId,
       videoId,
       segmentCount: ytSegments.length,
     });
@@ -287,7 +294,7 @@ export async function fetchCaptions(
   return {
     segments,
     source: "auto_captions",
-    language: pickLocale(ytSegments, videoId),
+    language: pickLocale(ytSegments, videoId, requestId),
     title: videoDetails?.title ?? null,
     channelName: videoDetails?.author ?? null,
   };

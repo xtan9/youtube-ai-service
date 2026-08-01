@@ -75,6 +75,7 @@ async function post(route: RequestableRoute, body: unknown): Promise<Response> {
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${VALID_KEY}`,
+      "X-Request-ID": "fixture-request-id",
     },
     body: JSON.stringify(body),
   });
@@ -86,6 +87,7 @@ async function postRaw(route: RequestableRoute, body: string): Promise<Response>
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${VALID_KEY}`,
+      "X-Request-ID": "fixture-request-id",
     },
     body,
   });
@@ -96,6 +98,15 @@ async function expectWireResponse(
   expected: WireResponse
 ): Promise<void> {
   expect(response.status).toBe(expected.status);
+  expect(response.headers.get("X-Request-ID")).toBe("fixture-request-id");
+  if (
+    expected.body &&
+    typeof expected.body === "object" &&
+    "errorId" in expected.body &&
+    typeof expected.body.errorId === "string"
+  ) {
+    expect(response.headers.get("X-Error-ID")).toBe(expected.body.errorId);
+  }
   if (expected.raw !== undefined) {
     expect(await response.text()).toBe(expected.raw);
   } else {

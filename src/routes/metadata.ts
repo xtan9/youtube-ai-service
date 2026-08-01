@@ -8,11 +8,15 @@ import {
 import { extractVideoId } from "../lib/captions.js";
 import { youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { jsonError } from "../lib/http-errors.js";
+import { logServiceEvent } from "../lib/observability.js";
+import { requestIdMiddleware, type ServiceEnv } from "../lib/request-id.js";
 
-const metadata = new Hono();
+const metadata = new Hono<ServiceEnv>();
 
 // Auth middleware attached inside the sub-router — same pattern as
 // /captions and /transcribe. See those routes for the reasoning.
+metadata.use("*", requestIdMiddleware);
 metadata.use("*", authMiddleware);
 
 const requestSchema = z.object({
@@ -26,22 +30,22 @@ metadata.post("/", async (c) => {
   } catch {
     // Explicit 400 so malformed bodies are client errors, not 500s. Same
     // convention as /captions and /transcribe.
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
   }
 
   const parsed = requestSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json(
-      { error: "Invalid request", details: parsed.error.flatten() },
-      400
-    );
+    return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
   }
 
   const { youtube_url } = parsed.data;
   const videoId = extractVideoId(youtube_url) ?? "unknown";
 
   try {
-    console.log(`Fetching metadata for video ${videoId}`);
+    logServiceEvent("info", "metadata.fetch", {
+      requestId: c.get("requestId"),
+      videoId,
+    });
     const ytdlpMeta = await fetchYtdlpMetadata(youtube_url);
     const detected = detectLanguage(ytdlpMeta);
     // The wire contract requires `language` to be a string (frontend
@@ -54,7 +58,8 @@ metadata.post("/", async (c) => {
     if (detected) {
       language = detected;
     } else {
-      console.warn(`[metadata] LANGUAGE_DETECT_FALLBACK for video ${videoId}`, {
+      logServiceEvent("warn", "metadata.LANGUAGE_DETECT_FALLBACK", {
+        requestId: c.get("requestId"),
         errorId: "LANGUAGE_DETECT_FALLBACK",
         videoId,
         hasLanguageField: Boolean(ytdlpMeta.language),
@@ -86,9 +91,13 @@ metadata.post("/", async (c) => {
   } catch (err) {
     // Generic client-facing message; full yt-dlp stderr stays in server
     // logs. Mirrors the /transcribe and /captions error-handling shape.
-    const message = err instanceof Error ? err.message : "Metadata fetch failed";
-    console.error(`Metadata fetch error for video ${videoId}: ${message}`);
-    return c.json({ error: "Metadata fetch failed" }, 500);
+    logServiceEvent("error", "metadata.failed", {
+      requestId: c.get("requestId"),
+      errorId: "METADATA_FAILED",
+      videoId,
+      errorName: err instanceof Error ? err.name : "unknown",
+    });
+    return jsonError(c, 500, "Metadata fetch failed", "METADATA_FAILED");
   }
 });
 

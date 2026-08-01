@@ -7,8 +7,9 @@ import { health } from "./routes/health.js";
 import { transcribe } from "./routes/transcribe.js";
 import { captions } from "./routes/captions.js";
 import { metadata } from "./routes/metadata.js";
+import type { ServiceEnv } from "./lib/request-id.js";
 
-const app = new Hono();
+const app = new Hono<ServiceEnv>();
 
 app.use("*", logger());
 

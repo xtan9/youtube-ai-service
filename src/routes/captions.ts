@@ -3,8 +3,11 @@ import { z } from "zod";
 import { fetchCaptions, extractVideoId } from "../lib/captions.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { jsonError } from "../lib/http-errors.js";
+import { logServiceEvent } from "../lib/observability.js";
+import { requestIdMiddleware, type ServiceEnv } from "../lib/request-id.js";
 
-const captions = new Hono();
+const captions = new Hono<ServiceEnv>();
 
 // Attach auth inside the sub-router so every path served by this router
 // — current and future — is protected by default. For the scope to work
@@ -12,6 +15,7 @@ const captions = new Hono();
 // in index.ts (NOT at `/`), so `*` only matches paths under /captions.
 // Mounting at `/` would make this middleware fire on /health and every
 // other app path.
+captions.use("*", requestIdMiddleware);
 captions.use("*", authMiddleware);
 
 const requestSchema = z.object({
@@ -32,15 +36,12 @@ captions.post("/", async (c) => {
     // Hono returns 500 by default on malformed JSON; explicit 400
     // signals "client error" so the frontend doesn't trigger retry or
     // alerting.
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
   }
 
   const parsed = requestSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json(
-      { error: "Invalid request", details: parsed.error.flatten() },
-      400
-    );
+    return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
   }
 
   const { youtube_url, lang } = parsed.data;
@@ -52,8 +53,12 @@ captions.post("/", async (c) => {
   const videoId = extractVideoId(youtube_url) ?? "unknown";
 
   try {
-    console.log(`Fetching captions for video ${videoId}${lang ? ` (lang=${lang})` : ""}`);
-    const result = await fetchCaptions(youtube_url, lang);
+    logServiceEvent("info", "captions.fetch", {
+      requestId: c.get("requestId"),
+      videoId,
+      lang,
+    });
+    const result = await fetchCaptions(youtube_url, lang, c.get("requestId"));
 
     // Status contract this route owes its consumers:
     //   200 — captions extracted, fallback path not needed
@@ -61,7 +66,9 @@ captions.post("/", async (c) => {
     //   404 — no captions available (fallback to /transcribe, no alert)
     //   500 — unexpected library/network failure (alert, do not fall back
     //         silently since that masks real problems behind compute bills)
-    if (!result) return c.json({ error: "no_captions" }, 404);
+    if (!result) {
+      return jsonError(c, 404, "no_captions", "CAPTIONS_NOT_FOUND");
+    }
 
     // Wire response carries `segments` (the canonical shape consumed by
     // the new frontend) AND a derived `transcript` string (kept for one
@@ -82,10 +89,13 @@ captions.post("/", async (c) => {
         .trim(),
     });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Caption fetch failed";
-    console.error(`Caption fetch error for video ${videoId}: ${message}`);
-    return c.json({ error: "Internal error" }, 500);
+    logServiceEvent("error", "captions.failed", {
+      requestId: c.get("requestId"),
+      errorId: "CAPTIONS_FAILED",
+      videoId,
+      errorName: err instanceof Error ? err.name : "unknown",
+    });
+    return jsonError(c, 500, "Internal error", "CAPTIONS_FAILED");
   }
 });
 
