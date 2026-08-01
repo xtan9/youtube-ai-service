@@ -6,10 +6,17 @@ Lightweight transcription microservice. Part of the YouTube AI Chat stack.
 
 - `POST /metadata` — Extract video metadata (title, description, detected language, duration in seconds or `null`, available caption track codes) via `yt-dlp --dump-json`. Call this first so the orchestrator can pin caption + whisper language and avoid the default "pick tracks[0]" bug that produced wrong-language transcripts. `duration` lets callers fail fast on videos too long for the no-captions Whisper fallback to finish inside `VPS_TIMEOUT_MS`.
 - `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional `lang` (ISO 639-1 or BCP-47) that forwards to `youtube-transcript-plus` so a specific caption track is selected. Returns 200 with `{ transcript, source, language, title, channelName }` or 404 `{ error: "no_captions" }` if the track isn't available. Much cheaper than transcription — call this before `/transcribe`.
-- `POST /transcribe` — Transcribe a YouTube video's audio. Primary path: download audio via yt-dlp, then post to [Groq](https://groq.com)'s `whisper-large-v3`. Falls back to local `whisper-ctranslate2` for audio ≤ `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (default 180s) when Groq fails. Returns 503 when Groq fails and audio is over the fallback cap. Accepts an optional `lang` (ISO 639-1 / BCP-47) forwarded to whichever backend handles the request.
+- `POST /transcribe` — Transcribe a YouTube video's audio. Primary path: download audio via yt-dlp, then post to [Groq](https://groq.com)'s `whisper-large-v3`. Eligible non-quota Groq failures fall back to local `whisper-ctranslate2` for audio ≤ `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (default 180s); quota exhaustion and operational compression failures return 503. Accepts an optional `lang` (ISO 639-1 / BCP-47, excluding undetermined/non-linguistic sentinels) forwarded to whichever backend handles the request.
 - `GET /health` — Health check (unauthenticated).
 
 All data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
+
+### Contract
+
+The authenticated endpoint behavior follows the reviewed
+[transcription HTTP contract v1](https://github.com/xtan9/youtubeai_chat_frontend/blob/main/docs/contracts/transcription-service-v1.md).
+The deterministic mirror used by route tests lives at
+`test-fixtures/transcription-contract/v1/cases.json`.
 
 ### Environment variables
 
