@@ -7,6 +7,16 @@ import { buildYtdlpCommonArgs } from "./ytdlp-common.js";
 
 export { POT_PROVIDER_URL } from "./ytdlp-common.js";
 
+export class AudioMediaLimitError extends Error {
+  constructor(
+    public readonly sizeBytes: number,
+    public readonly maxBytes: number
+  ) {
+    super(`downloaded media is ${sizeBytes} bytes, limit is ${maxBytes}`);
+    this.name = "AudioMediaLimitError";
+  }
+}
+
 export function buildYtdlpArgs(url: string, outputPath: string): string[] {
   return [
     "--extract-audio",
@@ -25,7 +35,10 @@ export function buildYtdlpArgs(url: string, outputPath: string): string[] {
  * Download audio from a YouTube URL using yt-dlp.
  * Returns the path to the downloaded MP3 file.
  */
-export async function downloadAudio(youtubeUrl: string): Promise<string> {
+export async function downloadAudio(
+  youtubeUrl: string,
+  maxBytes?: number
+): Promise<string> {
   const outputPath = join(tmpdir(), `ytai-${randomUUID()}.mp3`);
 
   const stderr = await new Promise<string>((resolve, reject) => {
@@ -60,6 +73,11 @@ export async function downloadAudio(youtubeUrl: string): Promise<string> {
     throw new Error(
       `yt-dlp exited 0 but produced a 0-byte file (stderr: ${stderr.slice(0, 500)})`
     );
+  }
+
+  if (maxBytes !== undefined && size > maxBytes) {
+    await unlink(outputPath).catch(() => {});
+    throw new AudioMediaLimitError(size, maxBytes);
   }
 
   return outputPath;

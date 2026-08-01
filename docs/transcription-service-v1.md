@@ -18,6 +18,18 @@ JSON, invalid YouTube URLs, invalid language hints, empty results, and the
 documented provider failures retain stable status meanings; provider details
 remain in bounded logs rather than response bodies.
 
+Resource limits are enforced before provider work can produce a successful
+response. The service fails closed when any required limit setting is missing
+or invalid. Request bodies are bounded on all three data endpoints;
+transcription downloads are bounded by both media bytes and duration, with an
+unknown duration rejected; per-key rate limits, concurrent transcription
+capacity, and endpoint timeouts are enforced in the service process. Limit and
+timeout responses are generic and stable: `413` for an oversized body or media
+item, `429` for rate or concurrency limits, `503` when media duration cannot be
+determined or service limits are misconfigured, and `504` for an endpoint
+timeout. These responses never include provider diagnostics or bearer-key
+material.
+
 The `/metadata` `duration` field uses `null` for an unknown video duration.
 That is distinct from the frontend's internal `duration: 0` marker on a
 synthesized untimed segment when it consumes the legacy transcript-only

@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from "hono";
 import { timingSafeEqual } from "node:crypto";
 import { jsonError } from "../lib/http-errors.js";
+import { fingerprintApiKey } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 
 function configuredApiKeys(): string[] {
@@ -37,5 +38,6 @@ export const authMiddleware: MiddlewareHandler<ServiceEnv> = async (c, next) => 
     return jsonError(c, 403, "Forbidden", "AUTH_INVALID_KEY");
   }
 
+  c.set("apiKeyFingerprint", fingerprintApiKey(token));
   await next();
 };

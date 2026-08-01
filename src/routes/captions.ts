@@ -5,6 +5,10 @@ import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { jsonError } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
+import {
+  readBoundedJson,
+  resourceLimitMiddleware,
+} from "../lib/resource-limits.js";
 import { requestIdMiddleware, type ServiceEnv } from "../lib/request-id.js";
 
 const captions = new Hono<ServiceEnv>();
@@ -17,6 +21,7 @@ const captions = new Hono<ServiceEnv>();
 // other app path.
 captions.use("*", requestIdMiddleware);
 captions.use("*", authMiddleware);
+captions.use("*", resourceLimitMiddleware("captions"));
 
 const requestSchema = z.object({
   youtube_url: youtubeUrlSchema,
@@ -29,17 +34,21 @@ const requestSchema = z.object({
 });
 
 captions.post("/", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
+  const bodyResult = await readBoundedJson(
+    c.req.raw,
+    c.get("resourceLimits").requestBodyMaxBytes
+  );
+  if (!bodyResult.ok && bodyResult.reason === "too_large") {
+    return jsonError(c, 413, "Request body too large", "REQUEST_BODY_TOO_LARGE");
+  }
+  if (!bodyResult.ok) {
     // Hono returns 500 by default on malformed JSON; explicit 400
     // signals "client error" so the frontend doesn't trigger retry or
     // alerting.
     return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
   }
 
-  const parsed = requestSchema.safeParse(body);
+  const parsed = requestSchema.safeParse(bodyResult.value);
   if (!parsed.success) {
     return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
   }

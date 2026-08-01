@@ -35,6 +35,8 @@ The deterministic mirror used by route tests lives at
 - `GROQ_MODEL` (optional, default `whisper-large-v3`). Set to `whisper-large-v3-turbo` to trade accuracy for speed; the default favours accuracy because turbo hallucinates more on long silent stretches.
 - `GROQ_TIMEOUT_MS` (optional, default 120000).
 - `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (optional, default 180) — audio cap above which we 503 instead of falling back to local Whisper after a Groq failure.
+- `MAX_REQUEST_BODY_BYTES`, `MAX_MEDIA_SIZE_BYTES`, `MAX_MEDIA_DURATION_SECONDS`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX_REQUESTS`, `MAX_CONCURRENT_JOBS` (required) — fail-closed request, media, per-key rate, and transcription concurrency limits.
+- `METADATA_TIMEOUT_MS`, `CAPTIONS_TIMEOUT_MS`, `TRANSCRIBE_TIMEOUT_MS` (required) — fail-closed endpoint ceilings. Limit and timeout responses use bounded generic error envelopes.
 - `TS_AUTHKEY`, `TS_EXIT_NODE_HOSTNAME` — Tailscale exit-node config.
 
 ## Tech
