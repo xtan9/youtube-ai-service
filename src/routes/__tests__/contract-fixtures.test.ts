@@ -1,0 +1,271 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import fixturesJson from "../../../test-fixtures/transcription-contract/v1/cases.json";
+import { captions } from "../captions.js";
+import { metadata } from "../metadata.js";
+import { transcribe } from "../transcribe.js";
+import * as captionsLib from "../../lib/captions.js";
+import type { CaptionResult, TranscriptSegment } from "../../lib/captions.js";
+import * as ytdlpMetadataLib from "../../lib/ytdlp-metadata.js";
+import type { YtdlpMetadata } from "../../lib/language-detect.js";
+import * as ytdlpLib from "../../lib/ytdlp.js";
+import * as whisperLib from "../../lib/whisper.js";
+import * as groqLib from "../../lib/groq-transcribe.js";
+import { GroqTranscribeError } from "../../lib/groq-transcribe.js";
+import * as audioDurationLib from "../../lib/audio-duration.js";
+
+type WireResponse = {
+  status: number;
+  body?: unknown;
+  raw?: string;
+};
+
+type FixtureCase = {
+  id: string;
+  endpoint: string;
+  request: {
+    youtube_url?: string;
+    lang?: string;
+    raw?: string;
+    langValues?: string[];
+  };
+  service?: {
+    arrange?: { kind: string; value?: unknown };
+    response: WireResponse;
+  };
+  frontend?: {
+    response: WireResponse;
+    legacyResponse?: WireResponse;
+  };
+};
+
+type FixtureWithService = FixtureCase & {
+  service: NonNullable<FixtureCase["service"]>;
+};
+
+type ContractFixtures = {
+  contractVersion: string;
+  owners: { producer: string; consumer: string };
+  youtubeUrl: string;
+  compatibilityWindow: {
+    current: string;
+    previous: string;
+    policy: string;
+    retirement: string;
+  };
+  cases: FixtureCase[];
+};
+
+const fixtures = fixturesJson as unknown as ContractFixtures;
+const VALID_KEY = "fixture-key";
+
+type RequestableRoute = {
+  request(path: string, init: RequestInit): Response | Promise<Response>;
+};
+
+function getCase(id: string): FixtureWithService {
+  const fixture = fixtures.cases.find((candidate) => candidate.id === id);
+  if (!fixture) throw new Error(`Missing contract fixture: ${id}`);
+  if (!fixture.service) throw new Error(`Fixture has no service arrangement: ${id}`);
+  return fixture as FixtureWithService;
+}
+
+async function post(route: RequestableRoute, body: unknown): Promise<Response> {
+  return await route.request("/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${VALID_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+async function postRaw(route: RequestableRoute, body: string): Promise<Response> {
+  return await route.request("/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${VALID_KEY}`,
+    },
+    body,
+  });
+}
+
+async function expectWireResponse(
+  response: Response,
+  expected: WireResponse
+): Promise<void> {
+  expect(response.status).toBe(expected.status);
+  if (expected.raw !== undefined) {
+    expect(await response.text()).toBe(expected.raw);
+  } else {
+    expect(await response.json()).toEqual(expected.body);
+  }
+}
+
+describe("transcription-http/v1 fixture manifest", () => {
+  it("declares the reviewed owner and compatibility window", () => {
+    expect(fixtures.contractVersion).toBe("transcription-http/v1");
+    expect(fixtures.owners).toEqual({
+      producer: "xtan9/youtube-ai-service",
+      consumer: "xtan9/youtubeai_chat_frontend",
+    });
+    expect(fixtures.compatibilityWindow.current).toBe("canonical-segments");
+    expect(fixtures.compatibilityWindow.previous).toBe("transcript-only");
+    expect(fixtures.compatibilityWindow.policy).toContain("Additive");
+  });
+
+  it("contains every required contract case", () => {
+    const ids = new Set(fixtures.cases.map((fixture) => fixture.id));
+    expect(ids).toEqual(
+      new Set([
+        "caption-success",
+        "caption-404",
+        "caption-500",
+        "transcription-success",
+        "transcription-503",
+        "metadata-known-duration",
+        "metadata-unknown-duration",
+        "multilingual-language-tags",
+        "legacy-transcript-only",
+        "empty-segments",
+        "malformed-json",
+        "invalid-language-sentinels",
+      ])
+    );
+  });
+
+  it("keeps the canonical and legacy wire variants together", () => {
+    const fixture = getCase("legacy-transcript-only");
+    expect(fixture.frontend?.response).toEqual(fixture.service.response);
+    expect(fixture.frontend?.legacyResponse).toEqual({
+      status: 200,
+      body: {
+        transcript: "Legacy compatibility fixture.",
+        language: "auto",
+        source: "whisper",
+      },
+    });
+  });
+});
+
+describe("service routes against transcription-http/v1 fixtures", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    process.env.VPS_API_KEY = VALID_KEY;
+    delete process.env.GROQ_API_KEY;
+    vi.spyOn(ytdlpLib, "downloadAudio").mockResolvedValue("/tmp/fixture.mp3");
+    vi.spyOn(ytdlpLib, "cleanupAudio").mockResolvedValue(undefined);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it.each([
+    "metadata-known-duration",
+    "metadata-unknown-duration",
+    "multilingual-language-tags",
+  ])("serves the %s metadata fixture at the HTTP boundary", async (id) => {
+    const fixture = getCase(id);
+    const value = fixture.service?.arrange?.value as YtdlpMetadata;
+    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue(value);
+
+    const response = await post(
+      metadata,
+      { youtube_url: fixture.request.youtube_url ?? fixtures.youtubeUrl }
+    );
+    await expectWireResponse(response, fixture.service.response);
+  });
+
+  it.each(["caption-success", "caption-404", "caption-500"])(
+    "serves the %s caption fixture at the HTTP boundary",
+    async (id) => {
+      const fixture = getCase(id);
+      const arrangement = fixture.service?.arrange;
+      if (arrangement?.kind === "captions") {
+        vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(
+          arrangement.value as CaptionResult
+        );
+      } else if (arrangement?.kind === "captions-null") {
+        vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(null);
+      } else {
+        vi.spyOn(captionsLib, "fetchCaptions").mockRejectedValue(
+          new Error("fixture provider failure")
+        );
+      }
+
+      const response = await post(
+        captions,
+        fixture.request.youtube_url
+          ? {
+              youtube_url: fixture.request.youtube_url,
+              ...(fixture.request.lang ? { lang: fixture.request.lang } : {}),
+            }
+          : fixture.request
+      );
+      await expectWireResponse(response, fixture.service.response);
+    }
+  );
+
+  it("serves the malformed-json fixture as a 400 client error", async () => {
+    const fixture = getCase("malformed-json");
+    const response = await postRaw(captions, fixture.request.raw ?? "");
+    await expectWireResponse(response, fixture.service.response);
+  });
+
+  it("rejects every invalid language sentinel on both data routes", async () => {
+    const fixture = getCase("invalid-language-sentinels");
+    const languageValues = fixture.request.langValues ?? [];
+
+    for (const lang of languageValues) {
+      const body = {
+        youtube_url: fixtures.youtubeUrl,
+        lang,
+      };
+      await expectWireResponse(
+        await post(captions, body),
+        fixture.service.response
+      );
+      await expectWireResponse(
+        await post(transcribe, body),
+        fixture.service.response
+      );
+    }
+  });
+
+  it.each([
+    "transcription-success",
+    "legacy-transcript-only",
+    "empty-segments",
+  ])("serves the %s transcription fixture at the HTTP boundary", async (id) => {
+    const fixture = getCase(id);
+    const arrangement = fixture.service?.arrange;
+    const segments = (arrangement?.value ?? []) as TranscriptSegment[];
+    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue(segments);
+
+    const response = await post(
+      transcribe,
+      fixture.request.youtube_url
+        ? {
+            youtube_url: fixture.request.youtube_url,
+            ...(fixture.request.lang ? { lang: fixture.request.lang } : {}),
+          }
+        : fixture.request
+    );
+    await expectWireResponse(response, fixture.service.response);
+  });
+
+  it("serves the transcription-503 fixture without falling back to local Whisper", async () => {
+    const fixture = getCase("transcription-503");
+    process.env.GROQ_API_KEY = "fixture-groq-key";
+    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
+      new GroqTranscribeError(429, "fixture rate limit")
+    );
+    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
+    const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
+
+    const response = await post(transcribe, {
+      youtube_url: fixture.request.youtube_url ?? fixtures.youtubeUrl,
+    });
+    await expectWireResponse(response, fixture.service.response);
+    expect(localSpy).not.toHaveBeenCalled();
+  });
+});

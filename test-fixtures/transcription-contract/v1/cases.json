@@ -1,0 +1,429 @@
+{
+  "contractVersion": "transcription-http/v1",
+  "owners": {
+    "producer": "xtan9/youtube-ai-service",
+    "consumer": "xtan9/youtubeai_chat_frontend"
+  },
+  "compatibilityWindow": {
+    "current": "canonical-segments",
+    "previous": "transcript-only",
+    "policy": "Additive response fields only; the derived transcript alias remains until both deployments are verified.",
+    "retirement": "Remove the alias in a separately reviewed cleanup change after the rollout window."
+  },
+  "youtubeUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "cases": [
+    {
+      "id": "caption-success",
+      "endpoint": "/captions",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "lang": "en"
+      },
+      "service": {
+        "arrange": {
+          "kind": "captions",
+          "value": {
+            "segments": [
+              { "text": "Welcome to the lesson.", "start": 0, "duration": 2.5 },
+              { "text": "Let's begin.", "start": 2.5, "duration": 1.5 }
+            ],
+            "source": "auto_captions",
+            "language": "en",
+            "title": "Contract fixture",
+            "channelName": "Fixture Channel"
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Welcome to the lesson.", "start": 0, "duration": 2.5 },
+              { "text": "Let's begin.", "start": 2.5, "duration": 1.5 }
+            ],
+            "transcript": "Welcome to the lesson. Let's begin.",
+            "source": "auto_captions",
+            "language": "en",
+            "title": "Contract fixture",
+            "channelName": "Fixture Channel"
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Welcome to the lesson.", "start": 0, "duration": 2.5 },
+              { "text": "Let's begin.", "start": 2.5, "duration": 1.5 }
+            ],
+            "transcript": "Welcome to the lesson. Let's begin.",
+            "source": "auto_captions",
+            "language": "en",
+            "title": "Contract fixture",
+            "channelName": "Fixture Channel"
+          }
+        },
+        "expect": "success"
+      }
+    },
+    {
+      "id": "caption-404",
+      "endpoint": "/captions",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": { "kind": "captions-null" },
+        "response": { "status": 404, "body": { "error": "no_captions" } }
+      },
+      "frontend": {
+        "response": { "status": 404, "body": { "error": "no_captions" } },
+        "expect": "null"
+      }
+    },
+    {
+      "id": "caption-500",
+      "endpoint": "/captions",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": { "kind": "captions-error" },
+        "response": { "status": 500, "body": { "error": "Internal error" } }
+      },
+      "frontend": {
+        "response": { "status": 500, "body": { "error": "Internal error" } },
+        "expect": "null"
+      }
+    },
+    {
+      "id": "transcription-success",
+      "endpoint": "/transcribe",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "lang": "en"
+      },
+      "service": {
+        "arrange": {
+          "kind": "transcription",
+          "value": [
+            { "text": "Transcription fixture output.", "start": 0, "duration": 3 }
+          ]
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Transcription fixture output.", "start": 0, "duration": 3 }
+            ],
+            "transcript": "Transcription fixture output.",
+            "language": "en",
+            "source": "whisper"
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Transcription fixture output.", "start": 0, "duration": 3 }
+            ],
+            "transcript": "Transcription fixture output.",
+            "language": "en",
+            "source": "whisper"
+          }
+        },
+        "expect": "success"
+      }
+    },
+    {
+      "id": "transcription-503",
+      "endpoint": "/transcribe",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": { "kind": "transcription-503" },
+        "response": {
+          "status": 503,
+          "body": {
+            "error": "Transcription service is temporarily unavailable. Please try again in a few minutes."
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 503,
+          "body": {
+            "error": "Transcription service is temporarily unavailable. Please try again in a few minutes."
+          }
+        },
+        "expect": "error"
+      }
+    },
+    {
+      "id": "metadata-known-duration",
+      "endpoint": "/metadata",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": {
+          "kind": "metadata",
+          "value": {
+            "title": "Contract fixture",
+            "description": "A deterministic metadata fixture.",
+            "language": "en",
+            "duration": 893,
+            "subtitles": {},
+            "automatic_captions": {
+              "en": [{ "url": "fixture", "ext": "vtt" }]
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "language": "en",
+            "title": "Contract fixture",
+            "description": "A deterministic metadata fixture.",
+            "duration": 893,
+            "availableCaptions": ["en"]
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "language": "en",
+            "title": "Contract fixture",
+            "description": "A deterministic metadata fixture.",
+            "duration": 893,
+            "availableCaptions": ["en"]
+          }
+        },
+        "expect": "success"
+      }
+    },
+    {
+      "id": "metadata-unknown-duration",
+      "endpoint": "/metadata",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": {
+          "kind": "metadata",
+          "value": {
+            "title": "Live fixture",
+            "description": "Duration is intentionally unknown.",
+            "language": "en",
+            "duration": null,
+            "subtitles": {},
+            "automatic_captions": {}
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "language": "en",
+            "title": "Live fixture",
+            "description": "Duration is intentionally unknown.",
+            "duration": null,
+            "availableCaptions": []
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "language": "en",
+            "title": "Live fixture",
+            "description": "Duration is intentionally unknown.",
+            "duration": null,
+            "availableCaptions": []
+          }
+        },
+        "expect": "success"
+      }
+    },
+    {
+      "id": "multilingual-language-tags",
+      "endpoint": "/metadata",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "languageTags": ["zh-Hans", "zh-Hant-TW", "en-US"],
+      "service": {
+        "arrange": {
+          "kind": "metadata",
+          "value": {
+            "title": "多语言 fixture",
+            "description": "Script and region tags stay deterministic.",
+            "language": "zh-Hant-TW",
+            "duration": 120,
+            "subtitles": {
+              "zh-Hans": [{ "url": "fixture", "ext": "vtt" }]
+            },
+            "automatic_captions": {
+              "en-US": [{ "url": "fixture", "ext": "vtt" }]
+            }
+          }
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "language": "zh",
+            "title": "多语言 fixture",
+            "description": "Script and region tags stay deterministic.",
+            "duration": 120,
+            "availableCaptions": ["zh", "en"]
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "language": "zh",
+            "title": "多语言 fixture",
+            "description": "Script and region tags stay deterministic.",
+            "duration": 120,
+            "availableCaptions": ["zh", "en"]
+          }
+        },
+        "expect": "success"
+      }
+    },
+    {
+      "id": "legacy-transcript-only",
+      "endpoint": "/transcribe",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": {
+          "kind": "transcription",
+          "value": [
+            { "text": "Legacy compatibility fixture.", "start": 0, "duration": 0 }
+          ]
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Legacy compatibility fixture.", "start": 0, "duration": 0 }
+            ],
+            "transcript": "Legacy compatibility fixture.",
+            "language": "auto",
+            "source": "whisper"
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Legacy compatibility fixture.", "start": 0, "duration": 0 }
+            ],
+            "transcript": "Legacy compatibility fixture.",
+            "language": "auto",
+            "source": "whisper"
+          }
+        },
+        "legacyResponse": {
+          "status": 200,
+          "body": {
+            "transcript": "Legacy compatibility fixture.",
+            "language": "auto",
+            "source": "whisper"
+          }
+        },
+        "expect": "legacy"
+      }
+    },
+    {
+      "id": "empty-segments",
+      "endpoint": "/transcribe",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": { "kind": "transcription", "value": [] },
+        "response": {
+          "status": 500,
+          "body": { "error": "Transcription produced no content" }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [],
+            "transcript": "",
+            "language": "en",
+            "source": "whisper"
+          }
+        },
+        "expect": "schema"
+      }
+    },
+    {
+      "id": "malformed-json",
+      "endpoint": "/captions",
+      "request": { "raw": "{not valid json" },
+      "service": {
+        "response": { "status": 400, "body": { "error": "Invalid JSON body" } }
+      },
+      "frontend": {
+        "response": { "status": 200, "raw": "not json{" },
+        "expect": "null"
+      }
+    },
+    {
+      "id": "invalid-language-sentinels",
+      "endpoint": "/captions",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "langValues": ["und", "zxx", "mul", "mis"]
+      },
+      "service": {
+        "response": {
+          "status": 400,
+          "body": {
+            "error": "Invalid request",
+            "details": {
+              "formErrors": [],
+              "fieldErrors": {
+                "lang": [
+                  "lang must not be an undetermined or non-linguistic sentinel"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 400,
+          "body": {
+            "error": "Invalid request",
+            "details": {
+              "formErrors": [],
+              "fieldErrors": {
+                "lang": [
+                  "lang must not be an undetermined or non-linguistic sentinel"
+                ]
+              }
+            }
+          }
+        },
+        "expect": "error"
+      }
+    }
+  ]
+}
