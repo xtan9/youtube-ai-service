@@ -1,6 +1,10 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { downloadAudio, cleanupAudio } from "../lib/ytdlp.js";
+import {
+  AudioMediaLimitError,
+  cleanupAudio,
+  downloadAudio,
+} from "../lib/ytdlp.js";
 import { transcribeAudio } from "../lib/whisper.js";
 import { extractVideoId } from "../lib/captions.js";
 import type { TranscriptSegment } from "../lib/captions.js";
@@ -14,6 +18,10 @@ import {
 import type { AudioCompressKind } from "../lib/audio-compress.js";
 import { jsonError } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
+import {
+  readBoundedJson,
+  resourceLimitMiddleware,
+} from "../lib/resource-limits.js";
 import { requestIdMiddleware, type ServiceEnv } from "../lib/request-id.js";
 
 // Exhaustive switch ensures any new AudioCompressKind requires an
@@ -47,6 +55,7 @@ const transcribe = new Hono<ServiceEnv>();
 // make this middleware fire on /health and every other app path.
 transcribe.use("*", requestIdMiddleware);
 transcribe.use("*", authMiddleware);
+transcribe.use("*", resourceLimitMiddleware("transcribe"));
 
 const requestSchema = z.object({
   youtube_url: youtubeUrlSchema,
@@ -59,17 +68,21 @@ const requestSchema = z.object({
 });
 
 transcribe.post("/", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
+  const bodyResult = await readBoundedJson(
+    c.req.raw,
+    c.get("resourceLimits").requestBodyMaxBytes
+  );
+  if (!bodyResult.ok && bodyResult.reason === "too_large") {
+    return jsonError(c, 413, "Request body too large", "REQUEST_BODY_TOO_LARGE");
+  }
+  if (!bodyResult.ok) {
     // Explicit 400 so a malformed client body is classified as client
     // error rather than falling through to Hono's default 500 — the
     // frontend should not retry or alert on a body-parse failure.
     return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
   }
 
-  const parsed = requestSchema.safeParse(body);
+  const parsed = requestSchema.safeParse(bodyResult.value);
   if (!parsed.success) {
     return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
   }
@@ -85,11 +98,43 @@ transcribe.post("/", async (c) => {
       lang,
     });
 
-    audioPath = await downloadAudio(youtube_url);
+    audioPath = await downloadAudio(
+      youtube_url,
+      c.get("resourceLimits").mediaMaxBytes
+    );
     logServiceEvent("info", "transcribe.audio_downloaded", {
       requestId: c.get("requestId"),
       videoId,
     });
+
+    const audioSeconds = await probeAudioDurationSeconds(audioPath);
+    if (audioSeconds === null) {
+      logServiceEvent("warn", "transcribe.MEDIA_DURATION_UNKNOWN", {
+        errorId: "MEDIA_DURATION_UNKNOWN",
+        requestId: c.get("requestId"),
+        videoId,
+      });
+      return jsonError(
+        c,
+        503,
+        "Video duration could not be determined",
+        "MEDIA_DURATION_UNKNOWN"
+      );
+    }
+    if (audioSeconds > c.get("resourceLimits").mediaMaxDurationSeconds) {
+      logServiceEvent("info", "transcribe.MEDIA_DURATION_EXCEEDED", {
+        errorId: "MEDIA_DURATION_EXCEEDED",
+        requestId: c.get("requestId"),
+        videoId,
+        audioSeconds,
+      });
+      return jsonError(
+        c,
+        413,
+        "Video exceeds the processing limit",
+        "MEDIA_DURATION_EXCEEDED"
+      );
+    }
 
     const hasGroqKey = Boolean(process.env.GROQ_API_KEY?.trim());
 
@@ -111,9 +156,8 @@ transcribe.post("/", async (c) => {
       } catch (err) {
         if (!(err instanceof GroqTranscribeError)) throw err;
 
-        // Probe duration only on the fallback path — the happy path
-        // (Groq succeeds) shouldn't pay the extra ffprobe cost.
-        const audioSeconds = await probeAudioDurationSeconds(audioPath);
+        // The duration safety preflight already ran before provider work;
+        // reuse its result when deciding whether a local fallback is safe.
         const fallbackCap =
           Number(process.env.GROQ_LOCAL_FALLBACK_MAX_SECONDS) || 180;
         // Fatal upstream failures we deliberately surface as errors rather
@@ -236,6 +280,19 @@ transcribe.post("/", async (c) => {
       source: "whisper" as const,
     });
   } catch (err) {
+    if (err instanceof AudioMediaLimitError) {
+      logServiceEvent("info", "transcribe.MEDIA_SIZE_EXCEEDED", {
+        errorId: "MEDIA_SIZE_EXCEEDED",
+        requestId: c.get("requestId"),
+        videoId,
+      });
+      return jsonError(
+        c,
+        413,
+        "Video exceeds the processing limit",
+        "MEDIA_SIZE_EXCEEDED"
+      );
+    }
     logServiceEvent("error", "transcribe.TRANSCRIBE_UNHANDLED", {
       errorId: "TRANSCRIBE_UNHANDLED",
       requestId: c.get("requestId"),

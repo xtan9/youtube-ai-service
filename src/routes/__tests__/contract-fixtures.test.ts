@@ -167,6 +167,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
     delete process.env.GROQ_API_KEY;
     vi.spyOn(ytdlpLib, "downloadAudio").mockResolvedValue("/tmp/fixture.mp3");
     vi.spyOn(ytdlpLib, "cleanupAudio").mockResolvedValue(undefined);
+    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
 

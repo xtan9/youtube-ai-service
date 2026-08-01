@@ -10,6 +10,10 @@ import { youtubeUrlSchema } from "../lib/youtube-url.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { jsonError } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
+import {
+  readBoundedJson,
+  resourceLimitMiddleware,
+} from "../lib/resource-limits.js";
 import { requestIdMiddleware, type ServiceEnv } from "../lib/request-id.js";
 
 const metadata = new Hono<ServiceEnv>();
@@ -18,22 +22,27 @@ const metadata = new Hono<ServiceEnv>();
 // /captions and /transcribe. See those routes for the reasoning.
 metadata.use("*", requestIdMiddleware);
 metadata.use("*", authMiddleware);
+metadata.use("*", resourceLimitMiddleware("metadata"));
 
 const requestSchema = z.object({
   youtube_url: youtubeUrlSchema,
 });
 
 metadata.post("/", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
+  const bodyResult = await readBoundedJson(
+    c.req.raw,
+    c.get("resourceLimits").requestBodyMaxBytes
+  );
+  if (!bodyResult.ok && bodyResult.reason === "too_large") {
+    return jsonError(c, 413, "Request body too large", "REQUEST_BODY_TOO_LARGE");
+  }
+  if (!bodyResult.ok) {
     // Explicit 400 so malformed bodies are client errors, not 500s. Same
     // convention as /captions and /transcribe.
     return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
   }
 
-  const parsed = requestSchema.safeParse(body);
+  const parsed = requestSchema.safeParse(bodyResult.value);
   if (!parsed.success) {
     return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
   }

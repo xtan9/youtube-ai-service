@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
+import type { ResourceLimitConfig } from "./resource-limits.js";
 
 export const REQUEST_ID_HEADER = "X-Request-ID";
 
@@ -11,6 +12,8 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,63}$/;
 export type ServiceEnv = {
   Variables: {
     requestId: string;
+    apiKeyFingerprint: string;
+    resourceLimits: ResourceLimitConfig;
   };
 };
 
