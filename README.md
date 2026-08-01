@@ -5,11 +5,18 @@ Lightweight transcription microservice. Part of the YouTube AI Chat stack.
 ## Endpoints
 
 - `POST /metadata` — Extract video metadata (title, description, detected language, duration in seconds or `null`, available caption track codes) via `yt-dlp --dump-json`. Call this first so the orchestrator can pin caption + whisper language and avoid the default "pick tracks[0]" bug that produced wrong-language transcripts. `duration` lets callers fail fast on videos too long for the no-captions Whisper fallback to finish inside `VPS_TIMEOUT_MS`.
-- `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional `lang` (ISO 639-1 or BCP-47) that forwards to `youtube-transcript-plus` so a specific caption track is selected. Returns 200 with `{ transcript, source, language, title, channelName }` or 404 `{ error: "no_captions" }` if the track isn't available. Much cheaper than transcription — call this before `/transcribe`.
+- `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional `lang` (ISO 639-1 or BCP-47) that forwards to `youtube-transcript-plus` so a specific caption track is selected. Returns 200 with `{ segments, transcript, source, language, title, channelName }` or 404 `{ error, errorId, requestId }` when no usable captions exist. Much cheaper than transcription — call this before `/transcribe`.
 - `POST /transcribe` — Transcribe a YouTube video's audio. Primary path: download audio via yt-dlp, then post to [Groq](https://groq.com)'s `whisper-large-v3`. Eligible non-quota Groq failures fall back to local `whisper-ctranslate2` for audio ≤ `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (default 180s); quota exhaustion and operational compression failures return 503. Accepts an optional `lang` (ISO 639-1 / BCP-47, excluding undetermined/non-linguistic sentinels) forwarded to whichever backend handles the request.
 - `GET /health` — Health check (unauthenticated).
 
-All data endpoints require `Authorization: Bearer <VPS_API_KEY>`.
+All data endpoints require `Authorization: Bearer <VPS_API_KEY>`. Every data
+response echoes a bounded `X-Request-ID`; callers may provide a safe request ID
+or let the service generate one. Error responses use a generic `{ error,
+errorId, requestId }` envelope and the same stable ID in `X-Error-ID`, while
+provider diagnostics stay in structured logs. Stable failures are `400` for
+invalid JSON/fields, `401` for missing or malformed auth, `403` for a wrong
+key, `404` for no captions, `500` for unexpected/empty results, and `503` for
+temporary transcription provider or capacity failures.
 
 ### Contract
 
@@ -22,6 +29,9 @@ The deterministic mirror used by route tests lives at
 
 - `VPS_API_KEY` (required) — Bearer token clients must present.
 - `GROQ_API_KEY` (required for primary transcription path) — when unset, the service silently falls through to local Whisper at any audio length.
+- `VPS_API_KEY_PREVIOUS` (optional) — previous Bearer token accepted during a
+  short rotation overlap. Set the new `VPS_API_KEY`, keep the old value here
+  only while the frontend is verified, then remove it and redeploy.
 - `GROQ_MODEL` (optional, default `whisper-large-v3`). Set to `whisper-large-v3-turbo` to trade accuracy for speed; the default favours accuracy because turbo hallucinates more on long silent stretches.
 - `GROQ_TIMEOUT_MS` (optional, default 120000).
 - `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (optional, default 180) — audio cap above which we 503 instead of falling back to local Whisper after a Groq failure.
@@ -105,4 +115,8 @@ ssh root@<vps> docker compose exec tailscale-exit tailscale status
 
 ## Auth
 
-`VPS_API_KEY` is a shared secret between this service and the Next.js API route that calls it. Keep it out of the repo.
+`VPS_API_KEY` is a shared secret between this service and the Next.js API route
+that calls it. Keep both key values out of the repo. For a rotation, deploy the
+new service key with the old key in `VPS_API_KEY_PREVIOUS`, update and verify
+the frontend, then remove the previous key. The overlap is intentionally short
+and must never be committed to source control.

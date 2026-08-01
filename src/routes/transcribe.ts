@@ -12,6 +12,9 @@ import {
   transcribeViaGroq,
 } from "../lib/groq-transcribe.js";
 import type { AudioCompressKind } from "../lib/audio-compress.js";
+import { jsonError } from "../lib/http-errors.js";
+import { logServiceEvent } from "../lib/observability.js";
+import { requestIdMiddleware, type ServiceEnv } from "../lib/request-id.js";
 
 // Exhaustive switch ensures any new AudioCompressKind requires an
 // explicit decision — TypeScript will error on the `never` assignment
@@ -36,12 +39,13 @@ function isOperationalCompressKind(kind: AudioCompressKind): boolean {
 // real diagnostics harder to find.
 let groqKeyMissingWarned = false;
 
-const transcribe = new Hono();
+const transcribe = new Hono<ServiceEnv>();
 
 // Attach auth inside the sub-router so every path served here is
 // protected by default. Mounted at `app.route("/transcribe", transcribe)`
 // in index.ts so `*` scopes to /transcribe only — mounting at `/` would
 // make this middleware fire on /health and every other app path.
+transcribe.use("*", requestIdMiddleware);
 transcribe.use("*", authMiddleware);
 
 const requestSchema = z.object({
@@ -62,15 +66,12 @@ transcribe.post("/", async (c) => {
     // Explicit 400 so a malformed client body is classified as client
     // error rather than falling through to Hono's default 500 — the
     // frontend should not retry or alert on a body-parse failure.
-    return c.json({ error: "Invalid JSON body" }, 400);
+    return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
   }
 
   const parsed = requestSchema.safeParse(body);
   if (!parsed.success) {
-    return c.json(
-      { error: "Invalid request", details: parsed.error.flatten() },
-      400
-    );
+    return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
   }
 
   const { youtube_url, lang } = parsed.data;
@@ -78,12 +79,17 @@ transcribe.post("/", async (c) => {
   let audioPath: string | null = null;
 
   try {
-    console.log(
-      `Transcribing video ${videoId}${lang ? ` (lang=${lang})` : ""}`
-    );
+    logServiceEvent("info", "transcribe.start", {
+      requestId: c.get("requestId"),
+      videoId,
+      lang,
+    });
 
     audioPath = await downloadAudio(youtube_url);
-    console.log(`Audio downloaded to: ${audioPath}`);
+    logServiceEvent("info", "transcribe.audio_downloaded", {
+      requestId: c.get("requestId"),
+      videoId,
+    });
 
     const hasGroqKey = Boolean(process.env.GROQ_API_KEY?.trim());
 
@@ -92,10 +98,11 @@ transcribe.post("/", async (c) => {
     if (!hasGroqKey) {
       if (!groqKeyMissingWarned) {
         groqKeyMissingWarned = true;
-        console.error(
-          "[transcribe] GROQ_API_KEY_MISSING — falling back to local Whisper at any audio length until the secret is set",
-          { errorId: "GROQ_API_KEY_MISSING" }
-        );
+        logServiceEvent("error", "transcribe.GROQ_API_KEY_MISSING", {
+          errorId: "GROQ_API_KEY_MISSING",
+          requestId: c.get("requestId"),
+          videoId,
+        });
       }
       segments = await transcribeAudio(audioPath, lang);
     } else {
@@ -152,40 +159,39 @@ transcribe.post("/", async (c) => {
           audioSeconds <= fallbackCap;
 
         if (eligibleForFallback) {
-          console.warn(
-            `[transcribe] GROQ_FALLBACK for video ${videoId}`,
-            {
-              errorId: "GROQ_FALLBACK",
-              videoId,
-              audioSeconds,
-              groqStatus: err.status,
-              compressKind: err.compressKind,
-            }
-          );
+          logServiceEvent("warn", "transcribe.GROQ_FALLBACK", {
+            errorId: "GROQ_FALLBACK",
+            requestId: c.get("requestId"),
+            videoId,
+            audioSeconds,
+            groqStatus: err.status,
+            compressKind: err.compressKind,
+          });
           segments = await transcribeAudio(audioPath, lang);
         } else {
-          console.error(
-            `[transcribe] GROQ_FAILED_NO_FALLBACK for video ${videoId}`,
-            {
-              errorId: "GROQ_FAILED_NO_FALLBACK",
-              videoId,
-              audioSeconds,
-              fallbackCap,
-              groqStatus: err.status,
-              compressKind: err.compressKind,
-            }
-          );
-          return c.json(
-            {
-              error:
-                "Transcription service is temporarily unavailable. Please try again in a few minutes.",
-            },
-            503
+          logServiceEvent("error", "transcribe.GROQ_FAILED_NO_FALLBACK", {
+            errorId: "GROQ_FAILED_NO_FALLBACK",
+            requestId: c.get("requestId"),
+            videoId,
+            audioSeconds,
+            fallbackCap,
+            groqStatus: err.status,
+            compressKind: err.compressKind,
+          });
+          return jsonError(
+            c,
+            503,
+            "Transcription temporarily unavailable",
+            "TRANSCRIPTION_TEMPORARILY_UNAVAILABLE"
           );
         }
       }
     }
-    console.log(`Transcription complete: ${segments.length} segments`);
+    logServiceEvent("info", "transcribe.complete", {
+      requestId: c.get("requestId"),
+      videoId,
+      segmentCount: segments.length,
+    });
 
     // Empty whisper output is the symmetric twin of the captions path's
     // CAPTION_EMPTY_TRANSCRIPT case — silently shipping `transcript: ""`
@@ -194,11 +200,17 @@ transcribe.post("/", async (c) => {
     // LLM summary downstream. Surface as 500 so the route's existing
     // "alert and skip cache" path classifies it correctly.
     if (segments.length === 0) {
-      console.error(`[transcribe] WHISPER_EMPTY_RESULT for video ${videoId}`, {
+      logServiceEvent("error", "transcribe.WHISPER_EMPTY_RESULT", {
         errorId: "WHISPER_EMPTY_RESULT",
+        requestId: c.get("requestId"),
         videoId,
       });
-      return c.json({ error: "Transcription produced no content" }, 500);
+      return jsonError(
+        c,
+        500,
+        "Transcription produced no content",
+        "TRANSCRIPTION_EMPTY_RESULT"
+      );
     }
 
     // Wire response carries `segments` (the canonical shape consumed by
@@ -224,19 +236,15 @@ transcribe.post("/", async (c) => {
       source: "whisper" as const,
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Transcription failed";
-    console.error(
-      `[transcribe] TRANSCRIBE_UNHANDLED for video ${videoId}`,
-      {
-        errorId: "TRANSCRIBE_UNHANDLED",
-        videoId,
-        errorName: err instanceof Error ? err.name : "unknown",
-        // `message` carries yt-dlp / whisper / Groq-internal stderr —
-        // stays in the log, never in the user-visible body.
-        message: message.slice(0, 500),
-      }
-    );
-    return c.json({ error: "Transcription failed" }, 500);
+    logServiceEvent("error", "transcribe.TRANSCRIBE_UNHANDLED", {
+      errorId: "TRANSCRIBE_UNHANDLED",
+      requestId: c.get("requestId"),
+      videoId,
+      errorName: err instanceof Error ? err.name : "unknown",
+      // `message` carries yt-dlp / whisper / Groq-internal stderr —
+      // stays out of the structured log and the user-visible body.
+    });
+    return jsonError(c, 500, "Transcription failed", "TRANSCRIPTION_FAILED");
   } finally {
     if (audioPath) {
       await cleanupAudio(audioPath);

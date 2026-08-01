@@ -257,7 +257,7 @@ describe("fetchCaptions", () => {
       fetchCaptions("https://youtu.be/dQw4w9WgXcQ")
     ).rejects.toThrow();
     expect(errorSpy).toHaveBeenCalledWith(
-      "[captions] CAPTION_UNEXPECTED_FAILURE",
+      "[captions.CAPTION_UNEXPECTED_FAILURE]",
       expect.objectContaining({
         errorId: "CAPTION_UNEXPECTED_FAILURE",
         videoId: "dQw4w9WgXcQ",
@@ -273,7 +273,7 @@ describe("fetchCaptions", () => {
     mockedFetchTranscript.mockResolvedValue(ok([]));
     expect(await fetchCaptions("https://youtu.be/dQw4w9WgXcQ")).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("empty segments"),
+      "[captions.empty_segments]",
       expect.objectContaining({
         errorId: "CAPTION_EMPTY_SEGMENTS",
         videoId: "dQw4w9WgXcQ",
@@ -288,7 +288,7 @@ describe("fetchCaptions", () => {
     );
     expect(await fetchCaptions("https://youtu.be/dQw4w9WgXcQ")).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("whitespace-only"),
+      "[captions.empty_transcript]",
       expect.objectContaining({
         errorId: "CAPTION_EMPTY_TRANSCRIPT",
         videoId: "dQw4w9WgXcQ",
@@ -421,13 +421,13 @@ describe("fetchCaptions", () => {
         lang: "zh-Hans",
       });
       expect(warnSpy).toHaveBeenCalledWith(
-        "[captions] CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
+        "[captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG]",
         expect.objectContaining({
           errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
           videoId: "dQw4w9WgXcQ",
           requested: "zh",
           matched: "zh-Hans",
-          available: ["zh-Hans", "en"],
+          availableCount: 2,
         })
       );
     });
@@ -564,7 +564,7 @@ describe("fetchCaptions", () => {
 
       expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
       expect(errorSpy).toHaveBeenCalledWith(
-        "[captions] CAPTION_UNEXPECTED_FAILURE",
+        "[captions.CAPTION_UNEXPECTED_FAILURE]",
         expect.objectContaining({
           errorId: "CAPTION_UNEXPECTED_FAILURE",
           videoId: "dQw4w9WgXcQ",

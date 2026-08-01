@@ -74,10 +74,24 @@
       },
       "service": {
         "arrange": { "kind": "captions-null" },
-        "response": { "status": 404, "body": { "error": "no_captions" } }
+        "response": {
+          "status": 404,
+          "body": {
+            "error": "no_captions",
+            "errorId": "CAPTIONS_NOT_FOUND",
+            "requestId": "fixture-request-id"
+          }
+        }
       },
       "frontend": {
-        "response": { "status": 404, "body": { "error": "no_captions" } },
+        "response": {
+          "status": 404,
+          "body": {
+            "error": "no_captions",
+            "errorId": "CAPTIONS_NOT_FOUND",
+            "requestId": "fixture-request-id"
+          }
+        },
         "expect": "null"
       }
     },
@@ -89,10 +103,24 @@
       },
       "service": {
         "arrange": { "kind": "captions-error" },
-        "response": { "status": 500, "body": { "error": "Internal error" } }
+        "response": {
+          "status": 500,
+          "body": {
+            "error": "Internal error",
+            "errorId": "CAPTIONS_FAILED",
+            "requestId": "fixture-request-id"
+          }
+        }
       },
       "frontend": {
-        "response": { "status": 500, "body": { "error": "Internal error" } },
+        "response": {
+          "status": 500,
+          "body": {
+            "error": "Internal error",
+            "errorId": "CAPTIONS_FAILED",
+            "requestId": "fixture-request-id"
+          }
+        },
         "expect": "null"
       }
     },
@@ -148,7 +176,9 @@
         "response": {
           "status": 503,
           "body": {
-            "error": "Transcription service is temporarily unavailable. Please try again in a few minutes."
+            "error": "Transcription temporarily unavailable",
+            "errorId": "TRANSCRIPTION_TEMPORARILY_UNAVAILABLE",
+            "requestId": "fixture-request-id"
           }
         }
       },
@@ -156,7 +186,9 @@
         "response": {
           "status": 503,
           "body": {
-            "error": "Transcription service is temporarily unavailable. Please try again in a few minutes."
+            "error": "Transcription temporarily unavailable",
+            "errorId": "TRANSCRIPTION_TEMPORARILY_UNAVAILABLE",
+            "requestId": "fixture-request-id"
           }
         },
         "expect": "error"
@@ -356,7 +388,11 @@
         "arrange": { "kind": "transcription", "value": [] },
         "response": {
           "status": 500,
-          "body": { "error": "Transcription produced no content" }
+          "body": {
+            "error": "Transcription produced no content",
+            "errorId": "TRANSCRIPTION_EMPTY_RESULT",
+            "requestId": "fixture-request-id"
+          }
         }
       },
       "frontend": {
@@ -377,7 +413,14 @@
       "endpoint": "/captions",
       "request": { "raw": "{not valid json" },
       "service": {
-        "response": { "status": 400, "body": { "error": "Invalid JSON body" } }
+        "response": {
+          "status": 400,
+          "body": {
+            "error": "Invalid JSON body",
+            "errorId": "INVALID_JSON",
+            "requestId": "fixture-request-id"
+          }
+        }
       },
       "frontend": {
         "response": { "status": 200, "raw": "not json{" },
@@ -396,14 +439,8 @@
           "status": 400,
           "body": {
             "error": "Invalid request",
-            "details": {
-              "formErrors": [],
-              "fieldErrors": {
-                "lang": [
-                  "lang must not be an undetermined or non-linguistic sentinel"
-                ]
-              }
-            }
+            "errorId": "INVALID_REQUEST",
+            "requestId": "fixture-request-id"
           }
         }
       },
@@ -412,14 +449,8 @@
           "status": 400,
           "body": {
             "error": "Invalid request",
-            "details": {
-              "formErrors": [],
-              "fieldErrors": {
-                "lang": [
-                  "lang must not be an undetermined or non-linguistic sentinel"
-                ]
-              }
-            }
+            "errorId": "INVALID_REQUEST",
+            "requestId": "fixture-request-id"
           }
         },
         "expect": "error"

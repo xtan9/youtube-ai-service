@@ -58,7 +58,11 @@ describe("POST /captions", () => {
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: "no_captions" });
+    expect(await res.json()).toMatchObject({
+      error: "no_captions",
+      errorId: "CAPTIONS_NOT_FOUND",
+      requestId: expect.any(String),
+    });
   });
 
   it("returns 200 with segments + a derived transcript string on success", async () => {
@@ -126,7 +130,11 @@ describe("POST /captions", () => {
     });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body).toEqual({ error: "Internal error" });
+    expect(body).toMatchObject({
+      error: "Internal error",
+      errorId: "CAPTIONS_FAILED",
+      requestId: expect.any(String),
+    });
     expect(body.error).not.toContain("internal-library-stack-trace");
   });
 
@@ -155,7 +163,11 @@ describe("POST /captions", () => {
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
       lang: "fr",
     });
-    expect(spy).toHaveBeenCalledWith(expect.any(String), "fr");
+    expect(spy).toHaveBeenCalledWith(
+      expect.any(String),
+      "fr",
+      expect.any(String)
+    );
   });
 
   it("omits `lang` when the caller didn't send one (back-compat)", async () => {
@@ -166,8 +178,13 @@ describe("POST /captions", () => {
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     // Second arg is undefined — preserves pre-PR behavior where no lang
-    // filter was applied.
-    expect(spy).toHaveBeenCalledWith(expect.any(String), undefined);
+    // filter was applied. The request ID is the new third argument used for
+    // correlated structured service logs.
+    expect(spy).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      expect.any(String)
+    );
   });
 
   it.each([

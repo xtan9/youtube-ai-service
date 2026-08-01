@@ -158,7 +158,11 @@ describe("POST /metadata", () => {
     });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body).toEqual({ error: "Metadata fetch failed" });
+    expect(body).toMatchObject({
+      error: "Metadata fetch failed",
+      errorId: "METADATA_FAILED",
+      requestId: expect.any(String),
+    });
     expect(JSON.stringify(body)).not.toContain("/opt/tmp");
   });
 });

@@ -144,7 +144,11 @@ describe("POST /transcribe", () => {
     });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body).toEqual({ error: "Transcription failed" });
+    expect(body).toMatchObject({
+      error: "Transcription failed",
+      errorId: "TRANSCRIPTION_FAILED",
+      requestId: expect.any(String),
+    });
     expect(JSON.stringify(body)).not.toContain("/opt/tmp");
     // Pin the structured outer-catch log so a future refactor can't
     // drop the videoId or errorId — operators rely on these for
@@ -187,8 +191,10 @@ describe("POST /transcribe", () => {
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({
+    expect(await res.json()).toMatchObject({
       error: "Transcription produced no content",
+      errorId: "TRANSCRIPTION_EMPTY_RESULT",
+      requestId: expect.any(String),
     });
     expect(errSpy).toHaveBeenCalledWith(
       expect.stringContaining("WHISPER_EMPTY_RESULT"),
@@ -212,7 +218,11 @@ describe("POST /transcribe", () => {
     });
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body).toEqual({ error: "Transcription failed" });
+    expect(body).toMatchObject({
+      error: "Transcription failed",
+      errorId: "TRANSCRIPTION_FAILED",
+      requestId: expect.any(String),
+    });
     expect(JSON.stringify(body)).not.toContain("whisper internal crash");
     expect(JSON.stringify(body)).not.toContain("/opt/models");
     expect(errSpy).toHaveBeenCalledWith(
