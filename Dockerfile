@@ -5,6 +5,10 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
+# Route tests live under src and compile with the application. Keep the
+# deterministic contract fixtures available to the builder so the same
+# TypeScript graph that CI validates also builds in the deployment image.
+COPY test-fixtures ./test-fixtures
 RUN npx tsc
 
 FROM node:22-slim
