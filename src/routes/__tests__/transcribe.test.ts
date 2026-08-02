@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { transcribe } from "../transcribe.js";
+import { createTranscribeRoute } from "../transcribe.js";
 import { resetResourceLimitState } from "../../lib/resource-limits.js";
-import * as transcriptionWorkflow from "../../lib/transcription-workflow.js";
+import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
+import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 const VALID_KEY = "test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+const workflow = vi.fn<TranscriptionWorkflow>();
+const transcribe = createTranscribeRoute(
+  createTestRuntimeConfig({ apiKeys: [VALID_KEY] }),
+  workflow
+);
 
 function post(body: unknown, headers: Record<string, string> = {}) {
   return transcribe.request("/", {
@@ -32,20 +38,7 @@ function postRaw(body: string) {
 beforeEach(() => {
   vi.restoreAllMocks();
   resetResourceLimitState();
-  process.env.VPS_API_KEY = VALID_KEY;
-  process.env.MAX_REQUEST_BODY_BYTES = "65536";
-  process.env.MAX_MEDIA_SIZE_BYTES = "50000000";
-  process.env.MAX_MEDIA_DURATION_SECONDS = "1800";
-  process.env.RATE_LIMIT_WINDOW_MS = "60000";
-  process.env.RATE_LIMIT_MAX_REQUESTS = "1000";
-  process.env.MAX_CONCURRENT_JOBS = "8";
-  process.env.METADATA_TIMEOUT_MS = "30000";
-  process.env.CAPTIONS_TIMEOUT_MS = "30000";
-  process.env.TRANSCRIBE_TIMEOUT_MS = "300000";
-  vi.spyOn(
-    transcriptionWorkflow,
-    "runTranscriptionWorkflow"
-  ).mockResolvedValue({
+  workflow.mockReset().mockResolvedValue({
     ok: true,
     segments: [{ text: "hello", start: 0, duration: 1 }],
   });
@@ -79,7 +72,7 @@ describe("POST /transcribe HTTP boundary", () => {
       { "X-Request-ID": "workflow-request-id" }
     );
 
-    expect(transcriptionWorkflow.runTranscriptionWorkflow).toHaveBeenCalledWith(
+    expect(workflow).toHaveBeenCalledWith(
       {
         youtubeUrl: VIDEO_URL,
         language: "fr",
@@ -96,7 +89,7 @@ describe("POST /transcribe HTTP boundary", () => {
   });
 
   it("maps a completed outcome to the compatibility response", async () => {
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+    workflow.mockResolvedValue({
       ok: true,
       segments: [
         { text: "  hello\tworld  ", start: 0, duration: 1 },
@@ -157,9 +150,7 @@ describe("POST /transcribe HTTP boundary", () => {
   ] as const)(
     "maps workflow outcome %s to its stable HTTP error",
     async (reason, status, error, errorId) => {
-      vi.mocked(
-        transcriptionWorkflow.runTranscriptionWorkflow
-      ).mockResolvedValue({ ok: false, reason });
+      workflow.mockResolvedValue({ ok: false, reason });
 
       const response = await post({ youtube_url: VIDEO_URL });
 
@@ -175,7 +166,7 @@ describe("POST /transcribe HTTP boundary", () => {
   );
 
   it("maps unexpected workflow defects to a generic failure", async () => {
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockRejectedValue(
+    workflow.mockRejectedValue(
       new Error("whisper internal crash: /opt/models/tiny.bin missing")
     );
 

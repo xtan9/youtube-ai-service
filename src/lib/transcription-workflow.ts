@@ -2,17 +2,18 @@ import type { TranscriptSegment } from "./captions.js";
 import type { AudioCompressKind } from "./audio-compress.js";
 import { probeAudioDurationSeconds } from "./audio-duration.js";
 import {
+  createGroqTranscriber,
   GroqTranscribeError,
-  transcribeViaGroq,
 } from "./groq-transcribe.js";
 import { logServiceEvent } from "./observability.js";
+import type { RuntimeConfig } from "./runtime-config.js";
 import { LocalTranscriptionError, transcribeAudio } from "./whisper.js";
 import {
   AudioDownloadError,
   AudioMediaLimitError,
   cleanupAudio,
+  createAudioDownloader,
   createAudioPath,
-  downloadAudio,
 } from "./ytdlp.js";
 
 function isOperationalCompressKind(kind: AudioCompressKind): boolean {
@@ -255,15 +256,31 @@ export function createTranscriptionWorkflow(
   };
 }
 
-export const runTranscriptionWorkflow = createTranscriptionWorkflow({
-  createAudioPath,
-  downloadAudio,
-  cleanupAudio,
-  probeAudioDurationSeconds,
-  transcribeViaGroq,
-  transcribeLocally: transcribeAudio,
-  isGroqConfigured: () => Boolean(process.env.GROQ_API_KEY?.trim()),
-  readLocalFallbackMaxSeconds: () =>
-    Number(process.env.GROQ_LOCAL_FALLBACK_MAX_SECONDS) || 180,
-  logEvent: logServiceEvent,
-});
+type ProductionWorkflowConfig = Pick<
+  RuntimeConfig,
+  "transcription" | "mediaAcquisition"
+>;
+
+export function createProductionTranscriptionWorkflow(
+  config: ProductionWorkflowConfig
+): TranscriptionWorkflow {
+  const groqConfig = config.transcription.groq;
+  const transcribeViaGroq = groqConfig
+    ? createGroqTranscriber(groqConfig)
+    : async () => {
+        throw new Error("Groq transcription is not configured");
+      };
+
+  return createTranscriptionWorkflow({
+    createAudioPath,
+    downloadAudio: createAudioDownloader(config.mediaAcquisition),
+    cleanupAudio,
+    probeAudioDurationSeconds,
+    transcribeViaGroq,
+    transcribeLocally: transcribeAudio,
+    isGroqConfigured: () => groqConfig !== null,
+    readLocalFallbackMaxSeconds: () =>
+      config.transcription.localFallbackMaxSeconds,
+    logEvent: logServiceEvent,
+  });
+}

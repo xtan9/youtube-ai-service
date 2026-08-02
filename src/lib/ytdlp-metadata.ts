@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { buildYtdlpCommonArgs } from "./ytdlp-common.js";
 import type { YtdlpMetadata } from "./language-detect.js";
+import type { MediaAcquisitionConfig } from "./runtime-config.js";
 
 // Descriptions are unbounded user content. Truncate before returning so we
 // don't bloat JSON responses or log lines. 2000 chars is more than enough
@@ -19,11 +20,14 @@ const YTDLP_METADATA_TIMEOUT_MS = 30_000;
  * player_client / PO Token / UA profile as the audio download so a
  * successful download implies a successful metadata fetch (and vice versa).
  */
-export function buildYtdlpMetadataArgs(url: string): string[] {
+export function buildYtdlpMetadataArgs(
+  url: string,
+  config: MediaAcquisitionConfig
+): string[] {
   return [
     "--dump-json",
     "--skip-download",
-    ...buildYtdlpCommonArgs(),
+    ...buildYtdlpCommonArgs(config),
     url,
   ];
 }
@@ -34,8 +38,15 @@ export function buildYtdlpMetadataArgs(url: string): string[] {
  * should classify this as 500 so a persistent yt-dlp regression is
  * visible rather than silently collapsing to "no language signal".
  */
-export async function fetchYtdlpMetadata(url: string): Promise<YtdlpMetadata> {
-  const args = buildYtdlpMetadataArgs(url);
+export function createYtdlpMetadataFetcher(config: MediaAcquisitionConfig) {
+  return (url: string) => fetchYtdlpMetadataWithConfig(config, url);
+}
+
+async function fetchYtdlpMetadataWithConfig(
+  config: MediaAcquisitionConfig,
+  url: string
+): Promise<YtdlpMetadata> {
+  const args = buildYtdlpMetadataArgs(url, config);
 
   const stdout = await new Promise<string>((resolve, reject) => {
     execFile(
@@ -63,6 +74,7 @@ export async function fetchYtdlpMetadata(url: string): Promise<YtdlpMetadata> {
 
   return normalizeYtdlpJson(raw);
 }
+
 
 function normalizeYtdlpJson(raw: unknown): YtdlpMetadata {
   // Narrow to Record before field access — yt-dlp output is schema-drift-y;

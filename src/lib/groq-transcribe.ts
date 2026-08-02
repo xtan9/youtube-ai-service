@@ -8,6 +8,7 @@ import {
 import type { AudioCompressKind } from "./audio-compress.js";
 import type { TranscriptSegment } from "./captions.js";
 import { getLanguageAnchorPrompt } from "./language-prompt.js";
+import type { GroqConfig } from "./runtime-config.js";
 
 // Subset of Groq's `verbose_json` response we consume. Groq's full shape
 // includes word-level timestamps and per-segment confidence; ignoring them
@@ -61,7 +62,6 @@ const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 // large-v3 is roughly 2-3x slower than turbo per minute of audio
 // and our default timeout was bumped to 180s on this PR to absorb
 // that.
-const DEFAULT_MODEL = "whisper-large-v3";
 // 180s default (was 120s on turbo). large-v3 takes longer per
 // minute of audio so a 14-18 min clip that previously completed in
 // ~40-60s can now spend 90-120s — and a Groq queue spike pushes that
@@ -72,31 +72,30 @@ const DEFAULT_MODEL = "whisper-large-v3";
 // drift fix is the whole point of this change, don't undo it via
 // timeout. Still well under the frontend's 240s VPS_TIMEOUT_MS
 // default.
-const DEFAULT_TIMEOUT_MS = 180_000;
 const RETRY_BACKOFF_MS = 2_000;
 
-export async function transcribeViaGroq(
+export function createGroqTranscriber(config: GroqConfig) {
+  return (audioPath: string, lang?: string) =>
+    transcribeWithGroq(config, audioPath, lang);
+}
+
+async function transcribeWithGroq(
+  config: GroqConfig,
   audioPath: string,
   lang?: string
 ): Promise<{ segments: TranscriptSegment[]; language: string }> {
-  const apiKey = process.env.GROQ_API_KEY;
+  const { apiKey, model, timeoutMs } = config;
   if (!apiKey) {
-    // Defensive: the route is supposed to check this before calling us.
+    // Defensive: the workflow is supposed to check this before calling us.
     // A thrown Error (not GroqTranscribeError) signals "programmer error,
     // not operational failure" so the route's discriminating catch will
     // re-throw rather than fall back.
     throw new Error("GROQ_API_KEY not set (call site should have checked)");
   }
 
-  const model = process.env.GROQ_MODEL || DEFAULT_MODEL;
   // `Number.isFinite && > 0` (not `||`) so an explicit `0` doesn't get
   // silently rewritten to the default — same convention the frontend's
   // MAX_TRANSCRIBE_DURATION_SECONDS parser uses.
-  const rawTimeout = Number(process.env.GROQ_TIMEOUT_MS);
-  const timeoutMs =
-    Number.isFinite(rawTimeout) && rawTimeout > 0
-      ? rawTimeout
-      : DEFAULT_TIMEOUT_MS;
 
   // Re-encode to 16 kHz mono 32 kbps mp3 before upload. yt-dlp's
   // `--audio-quality 0` mp3 produces ~245 kbps VBR, which blows past
@@ -108,9 +107,9 @@ export async function transcribeViaGroq(
     uploadPath = await compressForGroq(audioPath);
   } catch (err) {
     if (err instanceof AudioCompressError) {
-      // Surface as a Groq-side failure so the route's catch can apply
+      // Surface as a Groq-side failure so the workflow can apply
       // the same fallback rules — eligible for local Whisper iff the
-      // audio is short enough per the route's fallback cap, else 503.
+      // the configured local fallback policy.
       // Detail string carries the AudioCompressError kind so the route
       // log distinguishes "missing-binary" (deploy regression) from
       // "ffmpeg-failed" (bad input) from "timeout" (host saturation).
@@ -219,7 +218,7 @@ export async function transcribeViaGroq(
         duration: Math.max(0, s.end - s.start),
       });
     }
-    // Return empty segments verbatim — the route's existing length check
+    // Return empty segments verbatim — the workflow's length check
     // handles "no usable content" identically for both this backend and
     // the local-Whisper fallback path (WHISPER_EMPTY_RESULT). Throwing
     // here would break that symmetry by routing the response through the

@@ -1,11 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { buildYtdlpArgs, POT_PROVIDER_URL } from "../ytdlp.js";
+import { buildYtdlpArgs } from "../ytdlp.js";
+
+const mediaConfig = {
+  potProviderUrl: "http://custom-pot-provider.internal:4416",
+};
 
 describe("buildYtdlpArgs", () => {
   it("builds correct yt-dlp arguments", () => {
     const args = buildYtdlpArgs(
       "https://www.youtube.com/watch?v=test123",
-      "/tmp/audio.mp3"
+      "/tmp/audio.mp3",
+      mediaConfig
     );
     expect(args).toContain("--extract-audio");
     expect(args).toContain("--audio-format");
@@ -16,7 +21,11 @@ describe("buildYtdlpArgs", () => {
   });
 
   it("never tries the default `web` client first (it's the one hit by the datacenter-IP bot-wall)", () => {
-    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const args = buildYtdlpArgs(
+      "https://youtu.be/x",
+      "/tmp/x.mp3",
+      mediaConfig
+    );
     const extractorArgsIdx = args.indexOf("--extractor-args");
     expect(extractorArgsIdx).toBeGreaterThan(-1);
     const value = args[extractorArgsIdx + 1];
@@ -33,7 +42,11 @@ describe("buildYtdlpArgs", () => {
   });
 
   it("sets a browser User-Agent matching the player_client profile", () => {
-    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const args = buildYtdlpArgs(
+      "https://youtu.be/x",
+      "/tmp/x.mp3",
+      mediaConfig
+    );
     const uaIdx = args.indexOf("--user-agent");
     expect(uaIdx).toBeGreaterThan(-1);
     expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
@@ -42,7 +55,11 @@ describe("buildYtdlpArgs", () => {
   it("configures the PO Token provider so yt-dlp can satisfy YouTube's attestation requirement", () => {
     // Missing this arg means yt-dlp falls back to no-PO-Token mode, which
     // YouTube rejects for player responses regardless of IP or cookies.
-    const args = buildYtdlpArgs("https://youtu.be/x", "/tmp/x.mp3");
+    const args = buildYtdlpArgs(
+      "https://youtu.be/x",
+      "/tmp/x.mp3",
+      mediaConfig
+    );
     const extractorArgValues = args
       .map((a, i) => (a === "--extractor-args" ? args[i + 1] : null))
       .filter((v): v is string => v !== null);
@@ -60,7 +77,7 @@ describe("buildYtdlpArgs", () => {
     // wouldn't resolve in the shared namespace) fails the test instead of
     // passing a regex that only checks shape.
     expect(extractorArgValues).toContain(
-      `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`
+      `youtubepot-bgutilhttp:base_url=${mediaConfig.potProviderUrl}`
     );
   });
 });

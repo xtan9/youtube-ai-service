@@ -27,16 +27,23 @@ The deterministic mirror used by route tests lives at
 
 ### Environment variables
 
+The service parses these once at startup. Blank optional values select the
+documented defaults; an explicitly invalid value or missing `VPS_API_KEY`
+prevents the HTTP server from starting.
+
 - `VPS_API_KEY` (required) — Bearer token clients must present.
 - `GROQ_API_KEY` (required for primary transcription path) — when unset, the service silently falls through to local Whisper at any audio length.
 - `VPS_API_KEY_PREVIOUS` (optional) — previous Bearer token accepted during a
   short rotation overlap. Set the new `VPS_API_KEY`, keep the old value here
   only while the frontend is verified, then remove it and redeploy.
 - `GROQ_MODEL` (optional, default `whisper-large-v3`). Set to `whisper-large-v3-turbo` to trade accuracy for speed; the default favours accuracy because turbo hallucinates more on long silent stretches.
-- `GROQ_TIMEOUT_MS` (optional, default 120000).
+- `PORT` (optional, default `3001`) — Node listener port for direct process runs. Docker keeps the container listener on this default.
+- `HOST_PORT` (Compose-only, default `3001`) — published host port; separated from the Node setting so host mapping does not override application configuration.
+- `GROQ_TIMEOUT_MS` (optional, default `180000`).
 - `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (optional, default 180) — audio cap above which we 503 instead of falling back to local Whisper after a Groq failure.
-- `MAX_REQUEST_BODY_BYTES`, `MAX_MEDIA_SIZE_BYTES`, `MAX_MEDIA_DURATION_SECONDS`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX_REQUESTS`, `MAX_CONCURRENT_JOBS` — fail-closed request, media, per-key rate, and transcription concurrency limits. The Docker Compose deployment supplies safe defaults when these are absent from `.env`.
-- `METADATA_TIMEOUT_MS`, `CAPTIONS_TIMEOUT_MS`, `TRANSCRIBE_TIMEOUT_MS` — fail-closed endpoint ceilings. The Docker Compose deployment supplies safe defaults when these are absent from `.env`; limit and timeout responses use bounded generic error envelopes.
+- `POT_PROVIDER_URL` (optional, default `http://127.0.0.1:4416`) — Proof-of-Origin sidecar base URL used by every yt-dlp path.
+- `MAX_REQUEST_BODY_BYTES` (`65536`), `MAX_MEDIA_SIZE_BYTES` (`50000000`), `MAX_MEDIA_DURATION_SECONDS` (`1800`), `RATE_LIMIT_WINDOW_MS` (`60000`), `RATE_LIMIT_MAX_REQUESTS` (`60`), and `MAX_CONCURRENT_JOBS` (`2`) — optional request, media, per-key rate, and transcription concurrency limits.
+- `METADATA_TIMEOUT_MS` (`30000`), `CAPTIONS_TIMEOUT_MS` (`30000`), and `TRANSCRIBE_TIMEOUT_MS` (`300000`) — optional endpoint ceilings; timeout responses use bounded generic error envelopes.
 - `TS_AUTHKEY`, `TS_EXIT_NODE_HOSTNAME` — Tailscale exit-node config.
 
 ## Tech
@@ -52,6 +59,7 @@ Three containers in one compose stack:
 3. **`pot-provider`** — generates Proof-of-Origin tokens (`brainicism/bgutil-ytdlp-pot-provider`) that YouTube requires on many extraction paths
 
 `youtube-ai-service` and `pot-provider` share `tailscale-exit`'s network namespace (`network_mode: service:tailscale-exit`), so:
+
 - All three egress through the exit node (consistent caller identity)
 - Port 3001 is published by `tailscale-exit`
 - `pot-provider` is reachable at `127.0.0.1:4416` from inside the app container
@@ -70,6 +78,7 @@ Local dev does not bring up Tailscale or pot-provider — yt-dlp falls back to d
 Pushes to `main` trigger the CI workflow; on success, Deploy SSHes into the VPS, pulls, and runs `scripts/deploy.sh`.
 
 **Required GitHub secrets:**
+
 - `SERVER_HOST` — VPS hostname or IP
 - `SERVER_SSH_KEY` — SSH private key with access to `/opt/youtube-ai-service` on the VPS
 - `TS_AUTHKEY` — Tailscale reusable auth key (create at https://login.tailscale.com/admin/settings/keys, tag `tag:vps`, expiry ~90 days, set a calendar reminder to rotate)
@@ -98,17 +107,20 @@ The deploy pipeline writes `TS_AUTHKEY` and `TS_EXIT_NODE_HOSTNAME` into `.env` 
 ## Ops
 
 **Verify egress goes through home IP:**
+
 ```bash
 ssh root@<vps> docker compose exec youtube-ai-service curl -s https://ifconfig.me
 # Should print your HOME IP, not the Hetzner IP.
 ```
 
 **Check PO Token provider:**
+
 ```bash
 ssh root@<vps> docker compose exec youtube-ai-service curl -s http://127.0.0.1:4416/ping
 ```
 
 **Tailscale status:**
+
 ```bash
 ssh root@<vps> docker compose exec tailscale-exit tailscale status
 ```

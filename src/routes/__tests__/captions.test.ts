@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { captions } from "../captions.js";
+import { createCaptionsRoute } from "../captions.js";
 import * as captionsLib from "../../lib/captions.js";
+import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 // All route tests run with a valid VPS_API_KEY in env — the auth path is
 // also exercised via a dedicated block below.
 const VALID_KEY = "test-key";
+const captions = createCaptionsRoute(
+  createTestRuntimeConfig({ apiKeys: [VALID_KEY] })
+);
 
 function post(body: unknown, path = "/") {
   return captions.request(path, {
@@ -20,7 +24,6 @@ function post(body: unknown, path = "/") {
 describe("POST /captions", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    process.env.VPS_API_KEY = VALID_KEY;
   });
 
   it("rejects malformed bodies with 400", async () => {
@@ -229,7 +232,6 @@ describe("POST /captions — auth enforcement", () => {
   // level. Verify it actually fires on THIS path so a future refactor
   // that moves middleware can't silently expose the endpoint.
   beforeEach(() => {
-    process.env.VPS_API_KEY = VALID_KEY;
     vi.restoreAllMocks();
   });
 

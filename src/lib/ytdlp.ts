@@ -4,8 +4,7 @@ import { stat, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { buildYtdlpCommonArgs } from "./ytdlp-common.js";
-
-export { POT_PROVIDER_URL } from "./ytdlp-common.js";
+import type { MediaAcquisitionConfig } from "./runtime-config.js";
 
 export class AudioMediaLimitError extends Error {
   constructor(
@@ -28,14 +27,18 @@ export function createAudioPath(): string {
   return join(tmpdir(), `ytai-${randomUUID()}.mp3`);
 }
 
-export function buildYtdlpArgs(url: string, outputPath: string): string[] {
+export function buildYtdlpArgs(
+  url: string,
+  outputPath: string,
+  config: MediaAcquisitionConfig
+): string[] {
   return [
     "--extract-audio",
     "--audio-format",
     "mp3",
     "--audio-quality",
     "0",
-    ...buildYtdlpCommonArgs(),
+    ...buildYtdlpCommonArgs(config),
     "-o",
     outputPath,
     url,
@@ -46,13 +49,19 @@ export function buildYtdlpArgs(url: string, outputPath: string): string[] {
  * Download audio from a YouTube URL using yt-dlp.
  * Writes the downloaded MP3 to the workflow-owned path.
  */
-export async function downloadAudio(
+export function createAudioDownloader(config: MediaAcquisitionConfig) {
+  return (youtubeUrl: string, outputPath: string, maxBytes?: number) =>
+    downloadAudioWithConfig(config, youtubeUrl, outputPath, maxBytes);
+}
+
+async function downloadAudioWithConfig(
+  config: MediaAcquisitionConfig,
   youtubeUrl: string,
   outputPath: string,
   maxBytes?: number
 ): Promise<void> {
   const stderr = await new Promise<string>((resolve, reject) => {
-    const args = buildYtdlpArgs(youtubeUrl, outputPath);
+    const args = buildYtdlpArgs(youtubeUrl, outputPath, config);
     execFile("yt-dlp", args, { timeout: 300_000 }, (error, _stdout, err) => {
       if (error) {
         reject(
@@ -92,6 +101,7 @@ export async function downloadAudio(
     throw new AudioMediaLimitError(size, maxBytes);
   }
 }
+
 
 /**
  * Clean up a temporary audio file.

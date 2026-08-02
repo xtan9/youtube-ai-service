@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildYtdlpMetadataArgs,
-  fetchYtdlpMetadata,
+  createYtdlpMetadataFetcher,
 } from "../ytdlp-metadata.js";
-import { POT_PROVIDER_URL } from "../ytdlp-common.js";
+
+const mediaConfig = {
+  potProviderUrl: "http://custom-pot-provider.internal:4416",
+};
+const fetchYtdlpMetadata = createYtdlpMetadataFetcher(mediaConfig);
 
 // ESM module spying requires vi.mock at module scope — vi.spyOn on an
 // imported namespace fails with "Module namespace is not configurable".
@@ -16,7 +20,7 @@ const mockedExecFile = vi.mocked(execFile);
 
 describe("buildYtdlpMetadataArgs", () => {
   it("includes --dump-json and --skip-download (the whole point — no audio transfer)", () => {
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc");
+    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
     expect(args).toContain("--dump-json");
     expect(args).toContain("--skip-download");
   });
@@ -25,7 +29,7 @@ describe("buildYtdlpMetadataArgs", () => {
     // If these drift, the metadata path would hit YouTube's bot wall while
     // the download path works — producing a false "no language signal"
     // every time. Lock them to the same profile.
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc");
+    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
     const extractorArgValues = args
       .map((a, i) => (a === "--extractor-args" ? args[i + 1] : null))
       .filter((v): v is string => v !== null);
@@ -34,19 +38,19 @@ describe("buildYtdlpMetadataArgs", () => {
       extractorArgValues.some((v) => v.startsWith("youtube:player_client="))
     ).toBe(true);
     expect(extractorArgValues).toContain(
-      `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`
+      `youtubepot-bgutilhttp:base_url=${mediaConfig.potProviderUrl}`
     );
   });
 
   it("sets a browser User-Agent matching the audio-path profile", () => {
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc");
+    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
     const uaIdx = args.indexOf("--user-agent");
     expect(uaIdx).toBeGreaterThan(-1);
     expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
   });
 
   it("puts the URL last (yt-dlp positional arg convention)", () => {
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc");
+    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
     expect(args[args.length - 1]).toBe("https://youtu.be/abc");
   });
 });
