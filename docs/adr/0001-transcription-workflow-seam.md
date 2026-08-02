@@ -1,0 +1,3 @@
+# Put transcription orchestration behind one workflow seam
+
+The Hono transcription route previously coordinated media acquisition, admission checks, backend selection, fallback, logging, and cleanup directly. We place that policy behind one transcription-workflow interface that returns completed or classified outcomes and throws only unexpected defects; the HTTP route retains request validation, response shaping, and outcome-to-HTTP mapping. Adapter files remain separate private collaborators, and an injectable factory makes the workflow seam testable without exposing backend failure types to the route.

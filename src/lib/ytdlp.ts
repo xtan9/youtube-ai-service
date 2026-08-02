@@ -17,6 +17,17 @@ export class AudioMediaLimitError extends Error {
   }
 }
 
+export class AudioDownloadError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AudioDownloadError";
+  }
+}
+
+export function createAudioPath(): string {
+  return join(tmpdir(), `ytai-${randomUUID()}.mp3`);
+}
+
 export function buildYtdlpArgs(url: string, outputPath: string): string[] {
   return [
     "--extract-audio",
@@ -33,19 +44,22 @@ export function buildYtdlpArgs(url: string, outputPath: string): string[] {
 
 /**
  * Download audio from a YouTube URL using yt-dlp.
- * Returns the path to the downloaded MP3 file.
+ * Writes the downloaded MP3 to the workflow-owned path.
  */
 export async function downloadAudio(
   youtubeUrl: string,
+  outputPath: string,
   maxBytes?: number
-): Promise<string> {
-  const outputPath = join(tmpdir(), `ytai-${randomUUID()}.mp3`);
-
+): Promise<void> {
   const stderr = await new Promise<string>((resolve, reject) => {
     const args = buildYtdlpArgs(youtubeUrl, outputPath);
     execFile("yt-dlp", args, { timeout: 300_000 }, (error, _stdout, err) => {
       if (error) {
-        reject(new Error(`yt-dlp failed: ${err || error.message}`));
+        reject(
+          new AudioDownloadError(`yt-dlp failed: ${err || error.message}`, {
+            cause: error,
+          })
+        );
         return;
       }
       resolve(err);
@@ -63,24 +77,20 @@ export async function downloadAudio(
     // Preserve the original stat failure as `cause` so EACCES/ENAMETOOLONG
     // (rare but real on full disks / hostile tmp setups) don't get
     // misattributed to "no file produced".
-    throw new Error(
+    throw new AudioDownloadError(
       `yt-dlp exited 0 but stat of ${outputPath} failed (stderr: ${stderr.slice(0, 500)})`,
       { cause: statErr }
     );
   }
   if (size === 0) {
-    await unlink(outputPath).catch(() => {});
-    throw new Error(
+    throw new AudioDownloadError(
       `yt-dlp exited 0 but produced a 0-byte file (stderr: ${stderr.slice(0, 500)})`
     );
   }
 
   if (maxBytes !== undefined && size > maxBytes) {
-    await unlink(outputPath).catch(() => {});
     throw new AudioMediaLimitError(size, maxBytes);
   }
-
-  return outputPath;
 }
 
 /**
@@ -89,7 +99,15 @@ export async function downloadAudio(
 export async function cleanupAudio(filePath: string): Promise<void> {
   try {
     await unlink(filePath);
-  } catch {
-    // Ignore cleanup errors
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: string }).code === "ENOENT"
+    ) {
+      return;
+    }
+    throw error;
   }
 }

@@ -4,9 +4,7 @@ import { metadata } from "../metadata.js";
 import { transcribe } from "../transcribe.js";
 import * as captionsLib from "../../lib/captions.js";
 import * as metadataLib from "../../lib/ytdlp-metadata.js";
-import * as ytdlpLib from "../../lib/ytdlp.js";
-import * as audioDurationLib from "../../lib/audio-duration.js";
-import * as whisperLib from "../../lib/whisper.js";
+import * as transcriptionWorkflow from "../../lib/transcription-workflow.js";
 import { resetResourceLimitState } from "../../lib/resource-limits.js";
 
 const VALID_KEY = "resource-limit-test-key";
@@ -43,6 +41,13 @@ beforeEach(() => {
   process.env.CAPTIONS_TIMEOUT_MS = "30000";
   process.env.TRANSCRIBE_TIMEOUT_MS = "300000";
   delete process.env.GROQ_API_KEY;
+  vi.spyOn(
+    transcriptionWorkflow,
+    "runTranscriptionWorkflow"
+  ).mockResolvedValue({
+    ok: true,
+    segments: [{ text: "ok", start: 0, duration: 1 }],
+  });
 });
 
 describe("transcription resource limits", () => {
@@ -116,15 +121,20 @@ describe("transcription resource limits", () => {
   it("rejects a second transcription while the job limit is occupied", async () => {
     process.env.MAX_CONCURRENT_JOBS = "1";
     process.env.RATE_LIMIT_MAX_REQUESTS = "100";
-    let releaseDownload!: (path: string) => void;
-    const download = new Promise<string>((resolve) => {
-      releaseDownload = resolve;
+    let releaseWorkflow!: () => void;
+    const workflow = new Promise<{
+      ok: true;
+      segments: Array<{ text: string; start: number; duration: number }>;
+    }>((resolve) => {
+      releaseWorkflow = () =>
+        resolve({
+          ok: true,
+          segments: [{ text: "ok", start: 0, duration: 1 }],
+        });
     });
-    vi.spyOn(ytdlpLib, "downloadAudio").mockReturnValue(download);
-    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(1);
-    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([
-      { text: "ok", start: 0, duration: 1 },
-    ]);
+    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockReturnValue(
+      workflow
+    );
 
     const firstRequest = post(transcribe, { youtube_url: VIDEO_URL });
     await Promise.resolve();
@@ -136,15 +146,16 @@ describe("transcription resource limits", () => {
       errorId: "TRANSCRIPTION_BUSY",
     });
 
-    releaseDownload("/tmp/resource-limit.mp3");
+    releaseWorkflow();
     expect((await firstRequest).status).toBe(200);
   });
 
-  it("rejects media at the duration limit and never starts a provider", async () => {
+  it("passes the configured duration limit into the workflow", async () => {
     process.env.MAX_MEDIA_DURATION_SECONDS = "60";
-    vi.spyOn(ytdlpLib, "downloadAudio").mockResolvedValue("/tmp/too-long.mp3");
-    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60.1);
-    const provider = vi.spyOn(whisperLib, "transcribeAudio");
+    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+      ok: false,
+      reason: "media-duration-exceeded",
+    });
 
     const response = await post(transcribe, { youtube_url: VIDEO_URL });
 
@@ -153,15 +164,18 @@ describe("transcription resource limits", () => {
       error: "Video exceeds the processing limit",
       errorId: "MEDIA_DURATION_EXCEEDED",
     });
-    expect(provider).not.toHaveBeenCalled();
+    expect(transcriptionWorkflow.runTranscriptionWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limits: expect.objectContaining({ mediaMaxDurationSeconds: 60 }),
+      })
+    );
   });
 
-  it("rejects media at the byte limit without exposing provider details", async () => {
-    const provider = vi
-      .spyOn(ytdlpLib, "downloadAudio")
-      .mockRejectedValue(
-        new ytdlpLib.AudioMediaLimitError(50_000_001, 50_000_000)
-      );
+  it("passes the configured byte limit without exposing internal details", async () => {
+    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+      ok: false,
+      reason: "media-size-exceeded",
+    });
 
     const response = await post(transcribe, { youtube_url: VIDEO_URL });
 
@@ -172,18 +186,19 @@ describe("transcription resource limits", () => {
       errorId: "MEDIA_SIZE_EXCEEDED",
     });
     expect(JSON.stringify(payload)).not.toContain("50000001");
-    expect(provider).toHaveBeenCalledWith(VIDEO_URL, 50_000_000);
+    expect(transcriptionWorkflow.runTranscriptionWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limits: expect.objectContaining({ mediaMaxBytes: 50_000_000 }),
+      })
+    );
   });
 
   it("allows media exactly at the duration boundary", async () => {
     process.env.MAX_MEDIA_DURATION_SECONDS = "60";
-    vi.spyOn(ytdlpLib, "downloadAudio").mockResolvedValue("/tmp/exact.mp3");
-    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(
-      60
-    );
-    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue([
-      { text: "at the limit", start: 0, duration: 60 },
-    ]);
+    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+      ok: true,
+      segments: [{ text: "at the limit", start: 0, duration: 60 }],
+    });
 
     const response = await post(transcribe, { youtube_url: VIDEO_URL });
 
