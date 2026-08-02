@@ -1,5 +1,21 @@
-import { describe, it, expect } from "vitest";
-import { buildWhisperArgs, parseWhisperJson, WHISPER_CLI } from "../whisper.js";
+import { describe, it, expect, vi } from "vitest";
+import { unlink } from "fs/promises";
+import { tmpdir } from "os";
+import { join } from "path";
+import {
+  buildWhisperArgs,
+  parseWhisperJson,
+  transcribeAudio,
+  WHISPER_CLI,
+} from "../whisper.js";
+
+vi.mock("child_process", () => ({ execFile: vi.fn() }));
+vi.mock("fs/promises", () => ({ readFile: vi.fn(), unlink: vi.fn() }));
+
+import { execFile } from "child_process";
+
+const mockedExecFile = vi.mocked(execFile);
+const mockedUnlink = vi.mocked(unlink);
 
 describe("buildWhisperArgs", () => {
   it("builds correct whisper-ctranslate2 arguments", () => {
@@ -173,5 +189,26 @@ describe("parseWhisperJson", () => {
         JSON.stringify({ segments: [{ start: 0, text: "hi" }] })
       )
     ).toThrow(/missing start\/end\/text/);
+  });
+});
+
+describe("transcribeAudio", () => {
+  it("passes the work signal to Whisper and cleans partial output after abort", async () => {
+    const controller = new AbortController();
+    controller.abort(new DOMException("deadline", "TimeoutError"));
+    const { signal } = controller;
+    mockedUnlink.mockResolvedValue(undefined);
+    mockedExecFile.mockImplementation(
+      // @ts-expect-error execFile overloads do not narrow cleanly in mocks
+      (_command, _args, _options, callback) => {
+        callback?.(new Error("aborted"), "", "aborted");
+      },
+    );
+
+    await expect(transcribeAudio("/tmp/audio.mp3", "en", signal)).rejects.toThrow();
+    expect(mockedExecFile.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ signal }),
+    );
+    expect(mockedUnlink).toHaveBeenCalledWith(join(tmpdir(), "audio.json"));
   });
 });

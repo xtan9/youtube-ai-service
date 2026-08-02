@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fixturesJson from "../../../test-fixtures/transcription-contract/v1/cases.json";
-import { createCaptionsRoute } from "../captions.js";
+import {
+  createCaptionsRoute,
+  type CaptionsRouteDependencies,
+} from "../captions.js";
 import {
   createMetadataRoute,
   type MetadataRouteDependencies,
 } from "../metadata.js";
 import { createTranscribeRoute } from "../transcribe.js";
-import * as captionsLib from "../../lib/captions.js";
 import type { CaptionResult, TranscriptSegment } from "../../lib/captions.js";
 import type { YtdlpMetadata } from "../../lib/language-detect.js";
 import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
@@ -57,7 +59,10 @@ type ContractFixtures = {
 const fixtures = fixturesJson as unknown as ContractFixtures;
 const VALID_KEY = "fixture-key";
 const testConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
-const captions = createCaptionsRoute(testConfig);
+const captionsDependencies: CaptionsRouteDependencies = {
+  fetchCaptions: vi.fn(),
+};
+const captions = createCaptionsRoute(testConfig, captionsDependencies);
 const metadataDependencies: MetadataRouteDependencies = {
   fetchMetadata: vi.fn(),
 };
@@ -170,6 +175,7 @@ describe("transcription-http/v1 fixture manifest", () => {
 describe("service routes against transcription-http/v1 fixtures", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(captionsDependencies.fetchCaptions).mockReset();
     vi.mocked(metadataDependencies.fetchMetadata).mockReset();
     workflow.mockReset().mockResolvedValue({ ok: true, segments: [] });
   });
@@ -196,13 +202,13 @@ describe("service routes against transcription-http/v1 fixtures", () => {
       const fixture = getCase(id);
       const arrangement = fixture.service?.arrange;
       if (arrangement?.kind === "captions") {
-        vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(
+        vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(
           arrangement.value as CaptionResult
         );
       } else if (arrangement?.kind === "captions-null") {
-        vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(null);
+        vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(null);
       } else {
-        vi.spyOn(captionsLib, "fetchCaptions").mockRejectedValue(
+        vi.spyOn(captionsDependencies, "fetchCaptions").mockRejectedValue(
           new Error("fixture provider failure")
         );
       }

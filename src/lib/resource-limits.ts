@@ -19,8 +19,10 @@ export type BoundedJsonResult =
  */
 export async function readBoundedJson(
   request: Request,
-  maxBytes: number
+  maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<BoundedJsonResult> {
+  signal?.throwIfAborted();
   const contentLength = request.headers.get("content-length");
   if (contentLength !== null) {
     const declaredLength = Number(contentLength);
@@ -37,6 +39,10 @@ export async function readBoundedJson(
   if (!request.body) return { ok: false, reason: "invalid_json" };
 
   const reader = request.body.getReader();
+  const cancelRead = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined);
+  };
+  signal?.addEventListener("abort", cancelRead, { once: true });
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   try {
@@ -53,6 +59,7 @@ export async function readBoundedJson(
   } catch {
     return { ok: false, reason: "invalid_json" };
   } finally {
+    signal?.removeEventListener("abort", cancelRead);
     reader.releaseLock();
   }
 
@@ -70,112 +77,134 @@ export async function readBoundedJson(
   }
 }
 
-const rateBuckets = new Map<string, { startedAt: number; count: number }>();
-let activeTranscriptionJobs = 0;
-
 export function fingerprintApiKey(apiKey: string): string {
   return createHash("sha256").update(apiKey).digest("hex").slice(0, 16);
 }
 
-function consumeRateLimit(
-  key: string,
+export interface ResourceAdmission {
+  middleware(endpoint: ResourceLimitEndpoint): MiddlewareHandler<ServiceEnv>;
+}
+
+export interface AdmissionClock {
+  now(): number;
+  schedule(delayMs: number, callback: () => void): () => void;
+}
+
+const productionClock: AdmissionClock = {
+  now: Date.now,
+  schedule(delayMs, callback) {
+    const timer = setTimeout(callback, delayMs);
+    return () => clearTimeout(timer);
+  },
+};
+
+export function createResourceAdmission(
   config: ResourceLimitConfig,
-  now = Date.now()
-): boolean {
-  const current = rateBuckets.get(key);
-  if (!current || now - current.startedAt >= config.rateLimitWindowMs) {
-    rateBuckets.set(key, { startedAt: now, count: 1 });
+  clock: AdmissionClock = productionClock,
+): ResourceAdmission {
+  const rateBuckets = new Map<
+    string,
+    { startedAt: number; count: number }
+  >();
+  let activeTranscriptionJobs = 0;
+
+  function consumeRateLimit(key: string): boolean {
+    const now = clock.now();
+    const current = rateBuckets.get(key);
+    if (!current || now - current.startedAt >= config.rateLimitWindowMs) {
+      rateBuckets.set(key, { startedAt: now, count: 1 });
+      return true;
+    }
+    if (current.count >= config.rateLimitMaxRequests) return false;
+    current.count += 1;
     return true;
   }
-  if (current.count >= config.rateLimitMaxRequests) return false;
-  current.count += 1;
-  return true;
-}
 
-function tryAcquireTranscriptionJob(config: ResourceLimitConfig): (() => void) | null {
-  if (activeTranscriptionJobs >= config.maxConcurrentJobs) return null;
-  activeTranscriptionJobs += 1;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    activeTranscriptionJobs -= 1;
+  function tryAcquireTranscriptionJob(): (() => void) | null {
+    if (activeTranscriptionJobs >= config.maxConcurrentJobs) return null;
+    activeTranscriptionJobs += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      activeTranscriptionJobs -= 1;
+    };
+  }
+
+  return {
+    middleware: (endpoint) => async (c, next) => {
+      c.set("resourceLimits", config);
+
+      const keyFingerprint = c.get("apiKeyFingerprint");
+      if (!keyFingerprint || !consumeRateLimit(keyFingerprint)) {
+        logServiceEvent("warn", "resource_limits.rate_limited", {
+          errorId: "RATE_LIMITED",
+          requestId: c.get("requestId"),
+          stage: endpoint,
+        });
+        return jsonError(c, 429, "Too many requests", "RATE_LIMITED");
+      }
+
+      const releaseJob =
+        endpoint === "transcribe" ? tryAcquireTranscriptionJob() : null;
+      if (endpoint === "transcribe" && !releaseJob) {
+        logServiceEvent("warn", "resource_limits.concurrency_limited", {
+          errorId: "TRANSCRIPTION_BUSY",
+          requestId: c.get("requestId"),
+          stage: endpoint,
+        });
+        return jsonError(c, 429, "Transcription busy", "TRANSCRIPTION_BUSY");
+      }
+
+      const deadlineController = new AbortController();
+      c.set(
+        "workSignal",
+        AbortSignal.any([c.req.raw.signal, deadlineController.signal]),
+      );
+      let cancelDeadline = () => {};
+      const timeout = new Promise<"timeout">((resolve) => {
+        cancelDeadline = clock.schedule(
+          config.endpointTimeoutMs[endpoint],
+          () => {
+            deadlineController.abort(
+              new DOMException("Endpoint deadline exceeded", "TimeoutError"),
+            );
+            resolve("timeout");
+          },
+        );
+      });
+      const completion = next();
+      let outcome: "complete" | "timeout";
+      try {
+        outcome = await Promise.race([
+          completion.then(() => "complete" as const),
+          timeout,
+        ]);
+      } catch (error) {
+        cancelDeadline();
+        releaseJob?.();
+        throw error;
+      }
+      cancelDeadline();
+
+      if (outcome === "timeout") {
+        await completion.catch(() => undefined);
+        releaseJob?.();
+        logServiceEvent("warn", "resource_limits.endpoint_timeout", {
+          errorId: "ENDPOINT_TIMEOUT",
+          requestId: c.get("requestId"),
+          stage: endpoint,
+        });
+        const response = jsonError(
+          c,
+          504,
+          "Transcription service timed out",
+          "ENDPOINT_TIMEOUT",
+        );
+        c.res = response;
+        return response;
+      }
+      releaseJob?.();
+    },
   };
 }
-
-/** Test-only reset hook; production code never needs to clear process state. */
-export function resetResourceLimitState(): void {
-  rateBuckets.clear();
-  activeTranscriptionJobs = 0;
-}
-
-export const resourceLimitMiddleware = (
-  endpoint: ResourceLimitEndpoint,
-  config: AdmissionConfig
-): MiddlewareHandler<ServiceEnv> => async (c, next) => {
-  c.set("resourceLimits", config);
-
-  const keyFingerprint = c.get("apiKeyFingerprint");
-  if (!keyFingerprint || !consumeRateLimit(keyFingerprint, config)) {
-    logServiceEvent("warn", "resource_limits.rate_limited", {
-      errorId: "RATE_LIMITED",
-      requestId: c.get("requestId"),
-      stage: endpoint,
-    });
-    return jsonError(c, 429, "Too many requests", "RATE_LIMITED");
-  }
-
-  const releaseJob =
-    endpoint === "transcribe" ? tryAcquireTranscriptionJob(config) : null;
-  if (endpoint === "transcribe" && !releaseJob) {
-    logServiceEvent("warn", "resource_limits.concurrency_limited", {
-      errorId: "TRANSCRIPTION_BUSY",
-      requestId: c.get("requestId"),
-      stage: endpoint,
-    });
-    return jsonError(c, 429, "Transcription busy", "TRANSCRIPTION_BUSY");
-  }
-
-  let timedOut = false;
-  const downstream = next();
-  const completion = downstream.then(
-    () => {
-      if (!timedOut) releaseJob?.();
-    },
-    (error) => {
-      if (!timedOut) releaseJob?.();
-      throw error;
-    }
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), config.endpointTimeoutMs[endpoint]);
-  });
-  const outcome = await Promise.race([
-    completion.then(() => "complete" as const),
-    timeout,
-  ]);
-  if (timer) clearTimeout(timer);
-
-  if (outcome === "timeout") {
-    timedOut = true;
-    // Keep the concurrency slot occupied until the underlying work actually
-    // stops. This prevents a timed-out child process from being replaced by
-    // an unbounded stream of new jobs.
-    void completion.then(
-      () => releaseJob?.(),
-      () => releaseJob?.()
-    );
-    logServiceEvent("warn", "resource_limits.endpoint_timeout", {
-      errorId: "ENDPOINT_TIMEOUT",
-      requestId: c.get("requestId"),
-      stage: endpoint,
-    });
-    return jsonError(
-      c,
-      504,
-      "Transcription service timed out",
-      "ENDPOINT_TIMEOUT"
-    );
-  }
-};

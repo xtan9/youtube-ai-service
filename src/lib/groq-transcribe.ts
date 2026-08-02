@@ -75,16 +75,18 @@ const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const RETRY_BACKOFF_MS = 2_000;
 
 export function createGroqTranscriber(config: GroqConfig) {
-  return (audioPath: string, lang?: string) =>
-    transcribeWithGroq(config, audioPath, lang);
+  return (audioPath: string, lang?: string, signal?: AbortSignal) =>
+    transcribeWithGroq(config, audioPath, lang, signal);
 }
 
 async function transcribeWithGroq(
   config: GroqConfig,
   audioPath: string,
-  lang?: string
+  lang?: string,
+  signal?: AbortSignal,
 ): Promise<{ segments: TranscriptSegment[]; language: string }> {
   const { apiKey, model, timeoutMs } = config;
+  const workSignal = signal ?? new AbortController().signal;
   if (!apiKey) {
     // Defensive: the workflow is supposed to check this before calling us.
     // A thrown Error (not GroqTranscribeError) signals "programmer error,
@@ -104,8 +106,9 @@ async function transcribeWithGroq(
   // neutral (Whisper resamples to that rate before inference anyway).
   let uploadPath: string;
   try {
-    uploadPath = await compressForGroq(audioPath);
+    uploadPath = await compressForGroq(audioPath, workSignal);
   } catch (err) {
+    workSignal.throwIfAborted();
     if (err instanceof AudioCompressError) {
       // Surface as a Groq-side failure so the workflow can apply
       // the same fallback rules — eligible for local Whisper iff the
@@ -123,7 +126,7 @@ async function transcribeWithGroq(
   }
 
   try {
-    const fileBytes = await readFile(uploadPath);
+    const fileBytes = await readFile(uploadPath, { signal: workSignal });
     const buildBody = () => {
       const body = new FormData();
       body.append(
@@ -154,13 +157,15 @@ async function transcribeWithGroq(
       return body;
     };
 
-    const doFetch = () =>
-      fetch(GROQ_URL, {
+    const doFetch = () => {
+      const providerTimeout = AbortSignal.timeout(timeoutMs);
+      return fetch(GROQ_URL, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}` },
         body: buildBody(),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.any([workSignal, providerTimeout]),
       });
+    };
 
     let resp: Response;
     try {
@@ -170,10 +175,11 @@ async function transcribeWithGroq(
       // Groq's incidents tend to last longer than 2s and we want to fail
       // through to the local fallback quickly.
       if (resp.status === 429) {
-        await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+        await waitForRetryBackoff(workSignal);
         resp = await doFetch();
       }
     } catch (err) {
+      workSignal.throwIfAborted();
       if (err instanceof Error && err.name === "TimeoutError") {
         throw new GroqTranscribeError("timeout");
       }
@@ -245,4 +251,22 @@ async function transcribeWithGroq(
       );
     }
   }
+}
+
+function waitForRetryBackoff(signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, RETRY_BACKOFF_MS);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
 }

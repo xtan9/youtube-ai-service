@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { isNodeErrorWithCode } from "./node-errors.js";
 
 // Three-arm discriminator so callers (and prod logs) can tell apart
 // "ffmpeg isn't installed" from "ffmpeg ran but bailed on the input"
@@ -33,7 +34,10 @@ const FFMPEG_TIMEOUT_MS = 120_000;
 // of magnitude vs yt-dlp's `--audio-quality 0` output (~245 kbps VBR),
 // keeping the compressed file under Groq's 25 MB free-tier cap for the
 // vast majority of YouTube content (≈ 240 KB/min ⇒ ~100 min headroom).
-export async function compressForGroq(srcPath: string): Promise<string> {
+export async function compressForGroq(
+  srcPath: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const dstPath = join(tmpdir(), `groq-${randomUUID()}.mp3`);
   try {
     await new Promise<void>((resolve, reject) => {
@@ -58,7 +62,7 @@ export async function compressForGroq(srcPath: string): Promise<string> {
           "mp3",
           dstPath,
         ],
-        { timeout: FFMPEG_TIMEOUT_MS },
+        { timeout: FFMPEG_TIMEOUT_MS, signal },
         (error, _stdout, stderr) => {
           if (error) {
             const stderrStr =
@@ -124,12 +128,7 @@ export async function compressForGroq(srcPath: string): Promise<string> {
 // `ytdlp.cleanupAudio` historically.
 export async function cleanupCompressed(path: string): Promise<void> {
   await unlink(path).catch((err: unknown) => {
-    if (
-      err &&
-      typeof err === "object" &&
-      "code" in err &&
-      (err as { code?: string }).code === "ENOENT"
-    ) {
+    if (isNodeErrorWithCode(err, "ENOENT")) {
       return;
     }
     console.warn(

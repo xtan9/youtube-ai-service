@@ -1,11 +1,21 @@
-import { describe, it, expect } from "vitest";
-import { buildYtdlpArgs } from "../ytdlp.js";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { buildYtdlpArgs, createAudioDownloader } from "../ytdlp.js";
+
+vi.mock("child_process", () => ({ execFile: vi.fn() }));
+
+import { execFile } from "child_process";
+
+const mockedExecFile = vi.mocked(execFile);
 
 const mediaConfig = {
   potProviderUrl: "http://custom-pot-provider.internal:4416",
 };
 
 describe("buildYtdlpArgs", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("builds correct yt-dlp arguments", () => {
     const args = buildYtdlpArgs(
       "https://www.youtube.com/watch?v=test123",
@@ -78,6 +88,28 @@ describe("buildYtdlpArgs", () => {
     // passing a regex that only checks shape.
     expect(extractorArgValues).toContain(
       `youtubepot-bgutilhttp:base_url=${mediaConfig.potProviderUrl}`
+    );
+  });
+
+  it("passes the request work signal to yt-dlp", async () => {
+    const signal = new AbortController().signal;
+    mockedExecFile.mockImplementation(
+      // @ts-expect-error execFile overloads do not narrow cleanly in mocks
+      (_command, _args, _options, callback) => {
+        callback?.(new Error("stop before stat"), "", "aborted");
+      },
+    );
+
+    await expect(
+      createAudioDownloader(mediaConfig)(
+        "https://youtu.be/x",
+        "/tmp/x.mp3",
+        1_000,
+        signal,
+      ),
+    ).rejects.toThrow();
+    expect(mockedExecFile.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ signal }),
     );
   });
 });

@@ -11,6 +11,7 @@ import { youtubeUrlSchema } from "../lib/youtube-url.js";
 import { jsonError } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
 import { readBoundedJson } from "../lib/resource-limits.js";
+import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import type { RuntimeConfig } from "../lib/runtime-config.js";
 import { createDataRoute, type DataRouteConfig } from "./data-route.js";
@@ -19,7 +20,7 @@ type MetadataRouteConfig = DataRouteConfig &
   Pick<RuntimeConfig, "mediaAcquisition">;
 
 export interface MetadataRouteDependencies {
-  fetchMetadata(url: string): Promise<YtdlpMetadata>;
+  fetchMetadata(url: string, signal: AbortSignal): Promise<YtdlpMetadata>;
 }
 
 export function createMetadataRoute(
@@ -27,8 +28,9 @@ export function createMetadataRoute(
   dependencies: MetadataRouteDependencies = {
     fetchMetadata: createYtdlpMetadataFetcher(config.mediaAcquisition),
   },
+  admission?: ResourceAdmission,
 ): Hono<ServiceEnv> {
-  const metadata = createDataRoute("metadata", config);
+  const metadata = createDataRoute("metadata", config, admission);
 
   const requestSchema = z.object({
     youtube_url: youtubeUrlSchema,
@@ -38,6 +40,7 @@ export function createMetadataRoute(
     const bodyResult = await readBoundedJson(
       c.req.raw,
       c.get("resourceLimits").requestBodyMaxBytes,
+      c.get("workSignal"),
     );
     if (!bodyResult.ok && bodyResult.reason === "too_large") {
       return jsonError(
@@ -66,7 +69,10 @@ export function createMetadataRoute(
         requestId: c.get("requestId"),
         videoId,
       });
-      const ytdlpMeta = await dependencies.fetchMetadata(youtube_url);
+      const ytdlpMeta = await dependencies.fetchMetadata(
+        youtube_url,
+        c.get("workSignal"),
+      );
       const detected = detectLanguage(ytdlpMeta);
       // The wire contract requires `language` to be a string (frontend
       // schema rejects null). Map null → "en" at the route boundary so
@@ -109,6 +115,7 @@ export function createMetadataRoute(
         availableCaptions,
       });
     } catch (err) {
+      c.get("workSignal").throwIfAborted();
       // Generic client-facing message; full yt-dlp stderr stays in server
       // logs. Mirrors the /transcribe and /captions error-handling shape.
       logServiceEvent("error", "metadata.failed", {

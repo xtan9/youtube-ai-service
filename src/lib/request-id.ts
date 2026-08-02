@@ -14,6 +14,7 @@ export type ServiceEnv = {
     requestId: string;
     apiKeyFingerprint: string;
     resourceLimits: ResourceLimitConfig;
+    workSignal: AbortSignal;
   };
 };
 

@@ -102,6 +102,29 @@ describe("POST /metadata", () => {
     );
   });
 
+  it("passes the request work signal to metadata acquisition", async () => {
+    const fetchMetadata = vi
+      .spyOn(metadataDependencies, "fetchMetadata")
+      .mockResolvedValue({
+        title: "Example",
+        description: "",
+        language: "en",
+        duration: 1,
+        subtitles: {},
+        automatic_captions: {},
+      });
+
+    const response = await post({
+      youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMetadata).toHaveBeenCalledWith(
+      "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      expect.any(AbortSignal),
+    );
+  });
+
   it("forwards duration=null (live streams) without coercing to 0", async () => {
     // `null` must be forwarded verbatim — coercing to 0 here would break
     // any "video too long?" gate by silently passing it. Live streams
