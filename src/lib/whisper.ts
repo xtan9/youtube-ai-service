@@ -65,6 +65,13 @@ export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
 // yt-dlp path was fixed enough to actually reach this step.
 export const WHISPER_CLI = "whisper-ctranslate2";
 
+export class LocalTranscriptionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "LocalTranscriptionError";
+  }
+}
+
 interface WhisperJsonSegment {
   start: number;
   end: number;
@@ -142,7 +149,12 @@ export async function transcribeAudio(
       { timeout: 600_000 },
       async (error, _stdout, stderr) => {
         if (error) {
-          reject(new Error(`${WHISPER_CLI} failed: ${stderr || error.message}`));
+          reject(
+            new LocalTranscriptionError(
+              `${WHISPER_CLI} failed: ${stderr || error.message}`,
+              { cause: error }
+            )
+          );
           return;
         }
 
@@ -162,7 +174,12 @@ export async function transcribeAudio(
           });
           resolve(parseWhisperJson(raw));
         } catch (readErr) {
-          reject(new Error(`Failed to read transcript file: ${readErr}`));
+          reject(
+            new LocalTranscriptionError(
+              `Failed to read transcript file: ${readErr}`,
+              { cause: readErr }
+            )
+          );
         }
       }
     );

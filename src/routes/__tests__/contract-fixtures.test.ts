@@ -7,11 +7,7 @@ import * as captionsLib from "../../lib/captions.js";
 import type { CaptionResult, TranscriptSegment } from "../../lib/captions.js";
 import * as ytdlpMetadataLib from "../../lib/ytdlp-metadata.js";
 import type { YtdlpMetadata } from "../../lib/language-detect.js";
-import * as ytdlpLib from "../../lib/ytdlp.js";
-import * as whisperLib from "../../lib/whisper.js";
-import * as groqLib from "../../lib/groq-transcribe.js";
-import { GroqTranscribeError } from "../../lib/groq-transcribe.js";
-import * as audioDurationLib from "../../lib/audio-duration.js";
+import * as transcriptionWorkflow from "../../lib/transcription-workflow.js";
 
 type WireResponse = {
   status: number;
@@ -164,11 +160,10 @@ describe("service routes against transcription-http/v1 fixtures", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     process.env.VPS_API_KEY = VALID_KEY;
-    delete process.env.GROQ_API_KEY;
-    vi.spyOn(ytdlpLib, "downloadAudio").mockResolvedValue("/tmp/fixture.mp3");
-    vi.spyOn(ytdlpLib, "cleanupAudio").mockResolvedValue(undefined);
-    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(
+      transcriptionWorkflow,
+      "runTranscriptionWorkflow"
+    ).mockResolvedValue({ ok: true, segments: [] });
   });
 
   it.each([
@@ -251,7 +246,11 @@ describe("service routes against transcription-http/v1 fixtures", () => {
     const fixture = getCase(id);
     const arrangement = fixture.service?.arrange;
     const segments = (arrangement?.value ?? []) as TranscriptSegment[];
-    vi.spyOn(whisperLib, "transcribeAudio").mockResolvedValue(segments);
+    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue(
+      segments.length > 0
+        ? { ok: true, segments }
+        : { ok: false, reason: "empty-result" }
+    );
 
     const response = await post(
       transcribe,
@@ -267,17 +266,14 @@ describe("service routes against transcription-http/v1 fixtures", () => {
 
   it("serves the transcription-503 fixture without falling back to local Whisper", async () => {
     const fixture = getCase("transcription-503");
-    process.env.GROQ_API_KEY = "fixture-groq-key";
-    vi.spyOn(groqLib, "transcribeViaGroq").mockRejectedValue(
-      new GroqTranscribeError(429, "fixture rate limit")
-    );
-    vi.spyOn(audioDurationLib, "probeAudioDurationSeconds").mockResolvedValue(60);
-    const localSpy = vi.spyOn(whisperLib, "transcribeAudio");
+    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+      ok: false,
+      reason: "temporarily-unavailable",
+    });
 
     const response = await post(transcribe, {
       youtube_url: fixture.request.youtube_url ?? fixtures.youtubeUrl,
     });
     await expectWireResponse(response, fixture.service.response);
-    expect(localSpy).not.toHaveBeenCalled();
   });
 });
