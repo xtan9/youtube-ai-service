@@ -103,6 +103,18 @@ services:
       - GROQ_MODEL=${GROQ_MODEL:-}
       - GROQ_TIMEOUT_MS=${GROQ_TIMEOUT_MS:-}
       - GROQ_LOCAL_FALLBACK_MAX_SECONDS=${GROQ_LOCAL_FALLBACK_MAX_SECONDS:-}
+      # Resource and timeout limits are required by the app's fail-closed
+      # middleware. Safe defaults keep an older VPS .env compatible after an
+      # upgrade; operators can override every value from .env.
+      - MAX_REQUEST_BODY_BYTES=${MAX_REQUEST_BODY_BYTES-65536}
+      - MAX_MEDIA_SIZE_BYTES=${MAX_MEDIA_SIZE_BYTES-50000000}
+      - MAX_MEDIA_DURATION_SECONDS=${MAX_MEDIA_DURATION_SECONDS-1800}
+      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS-60000}
+      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS-60}
+      - MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS-2}
+      - METADATA_TIMEOUT_MS=${METADATA_TIMEOUT_MS-30000}
+      - CAPTIONS_TIMEOUT_MS=${CAPTIONS_TIMEOUT_MS-30000}
+      - TRANSCRIBE_TIMEOUT_MS=${TRANSCRIBE_TIMEOUT_MS-300000}
       - PORT=3001
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1))\""]
