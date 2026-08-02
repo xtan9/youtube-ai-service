@@ -3,6 +3,7 @@ import { z } from "zod";
 import { extractVideoId } from "../lib/captions.js";
 import { jsonError } from "../lib/http-errors.js";
 import { readBoundedJson } from "../lib/resource-limits.js";
+import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import {
   createProductionTranscriptionWorkflow,
@@ -20,8 +21,9 @@ export function createTranscribeRoute(
   workflow: TranscriptionWorkflow = createProductionTranscriptionWorkflow(
     config,
   ),
+  admission?: ResourceAdmission,
 ): Hono<ServiceEnv> {
-  const transcribe = createDataRoute("transcribe", config);
+  const transcribe = createDataRoute("transcribe", config, admission);
 
   const requestSchema = z.object({
     youtube_url: youtubeUrlSchema,
@@ -34,6 +36,7 @@ export function createTranscribeRoute(
     const bodyResult = await readBoundedJson(
       c.req.raw,
       c.get("resourceLimits").requestBodyMaxBytes,
+      c.get("workSignal"),
     );
     if (!bodyResult.ok && bodyResult.reason === "too_large") {
       return jsonError(
@@ -60,6 +63,7 @@ export function createTranscribeRoute(
       const outcome = await workflow({
         youtubeUrl,
         language: lang,
+        signal: c.get("workSignal"),
         limits: {
           mediaMaxBytes: limits.mediaMaxBytes,
           mediaMaxDurationSeconds: limits.mediaMaxDurationSeconds,
@@ -135,6 +139,7 @@ export function createTranscribeRoute(
         source: "whisper" as const,
       });
     } catch {
+      c.get("workSignal").throwIfAborted();
       // The workflow has already emitted a safe failure event with correlation
       // data. The HTTP boundary deliberately exposes no implementation detail.
       return jsonError(c, 500, "Transcription failed", "TRANSCRIPTION_FAILED");

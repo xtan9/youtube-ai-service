@@ -27,7 +27,7 @@ const mockedExecFile = childProcess.execFile as unknown as {
     fn: (
       file: string,
       args: readonly string[] | null | undefined,
-      opts: { timeout?: number } | null | undefined,
+      opts: { timeout?: number; signal?: AbortSignal } | null | undefined,
       cb: (
         err:
           | (Error & { code?: string; killed?: boolean; signal?: string })
@@ -115,6 +115,17 @@ describe("compressForGroq", () => {
       out,
     ]);
     expect(opts.timeout).toBe(120_000);
+  });
+
+  it("passes the request work signal to ffmpeg", async () => {
+    const signal = new AbortController().signal;
+    mockExecFileOk();
+
+    await compressForGroq("/tmp/src.mp3", signal);
+
+    expect(mockedExecFile.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ signal }),
+    );
   });
 
   it("classifies execFile timeout-kill as kind='timeout' regardless of stderr content", async () => {

@@ -4,6 +4,7 @@ import { stat, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { buildYtdlpCommonArgs } from "./ytdlp-common.js";
+import { isNodeErrorWithCode } from "./node-errors.js";
 import type { MediaAcquisitionConfig } from "./runtime-config.js";
 
 export class AudioMediaLimitError extends Error {
@@ -50,19 +51,24 @@ export function buildYtdlpArgs(
  * Writes the downloaded MP3 to the workflow-owned path.
  */
 export function createAudioDownloader(config: MediaAcquisitionConfig) {
-  return (youtubeUrl: string, outputPath: string, maxBytes?: number) =>
-    downloadAudioWithConfig(config, youtubeUrl, outputPath, maxBytes);
+  return (
+    youtubeUrl: string,
+    outputPath: string,
+    maxBytes?: number,
+    signal?: AbortSignal,
+  ) => downloadAudioWithConfig(config, youtubeUrl, outputPath, maxBytes, signal);
 }
 
 async function downloadAudioWithConfig(
   config: MediaAcquisitionConfig,
   youtubeUrl: string,
   outputPath: string,
-  maxBytes?: number
+  maxBytes?: number,
+  signal?: AbortSignal,
 ): Promise<void> {
   const stderr = await new Promise<string>((resolve, reject) => {
     const args = buildYtdlpArgs(youtubeUrl, outputPath, config);
-    execFile("yt-dlp", args, { timeout: 300_000 }, (error, _stdout, err) => {
+    execFile("yt-dlp", args, { timeout: 300_000, signal }, (error, _stdout, err) => {
       if (error) {
         reject(
           new AudioDownloadError(`yt-dlp failed: ${err || error.message}`, {
@@ -110,12 +116,7 @@ export async function cleanupAudio(filePath: string): Promise<void> {
   try {
     await unlink(filePath);
   } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: string }).code === "ENOENT"
-    ) {
+    if (isNodeErrorWithCode(error, "ENOENT")) {
       return;
     }
     throw error;

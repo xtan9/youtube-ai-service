@@ -13,9 +13,10 @@ const FFPROBE_TIMEOUT_MS = 10_000;
  * rather than promoting to a 500.
  */
 export async function probeAudioDurationSeconds(
-  audioPath: string
+  audioPath: string,
+  signal?: AbortSignal,
 ): Promise<number | null> {
-  const stdout = await new Promise<string | null>((resolve) => {
+  const stdout = await new Promise<string | null>((resolve, reject) => {
     execFile(
       "ffprobe",
       [
@@ -26,9 +27,15 @@ export async function probeAudioDurationSeconds(
         "-show_format",
         audioPath,
       ],
-      { timeout: FFPROBE_TIMEOUT_MS, maxBuffer: 1 * 1024 * 1024 },
+      { timeout: FFPROBE_TIMEOUT_MS, maxBuffer: 1 * 1024 * 1024, signal },
       (error, out) => {
         if (error) {
+          try {
+            signal?.throwIfAborted();
+          } catch (abortReason) {
+            reject(abortReason);
+            return;
+          }
           // Distinct from "audio is malformed" — this is ffprobe
           // itself failing (missing binary, OOM, timeout). Operators
           // need to distinguish these from "video legitimately

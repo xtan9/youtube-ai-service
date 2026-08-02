@@ -30,4 +30,27 @@ describe("createApp", () => {
     expect(rejected.status).toBe(403);
     expect(accepted.status).toBe(400);
   });
+
+  it("shares one authenticated-key rate budget across data endpoints", async () => {
+    const app = createApp(
+      loadRuntimeConfig({
+        VPS_API_KEY: "shared-budget-key",
+        RATE_LIMIT_MAX_REQUESTS: "1",
+      }),
+    );
+    const request = (path: string) =>
+      app.request(path, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer shared-budget-key",
+        },
+        body: JSON.stringify({}),
+      });
+
+    expect((await request("/captions")).status).toBe(400);
+    const response = await request("/metadata");
+    expect(response.status).toBe(429);
+    expect(await response.json()).toMatchObject({ errorId: "RATE_LIMITED" });
+  });
 });

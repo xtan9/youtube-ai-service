@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { join, basename } from "path";
 import type { TranscriptSegment } from "./captions.js";
 import { getLanguageAnchorPrompt } from "./language-prompt.js";
+import { isNodeErrorWithCode } from "./node-errors.js";
 
 export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
   const args = [
@@ -138,17 +139,23 @@ export function parseWhisperJson(json: string): TranscriptSegment[] {
  */
 export async function transcribeAudio(
   audioPath: string,
-  lang?: string
+  lang?: string,
+  signal?: AbortSignal,
 ): Promise<TranscriptSegment[]> {
+  const jsonPath = join(
+    tmpdir(),
+    basename(audioPath).replace(/\.[^.]+$/, ".json"),
+  );
   return new Promise((resolve, reject) => {
     const args = buildWhisperArgs(audioPath, lang);
 
     execFile(
       WHISPER_CLI,
       args,
-      { timeout: 600_000 },
+      { timeout: 600_000, signal },
       async (error, _stdout, stderr) => {
         if (error) {
+          await cleanupWhisperOutput(jsonPath);
           reject(
             new LocalTranscriptionError(
               `${WHISPER_CLI} failed: ${stderr || error.message}`,
@@ -158,22 +165,13 @@ export async function transcribeAudio(
           return;
         }
 
-        const jsonPath = join(
-          tmpdir(),
-          basename(audioPath).replace(/\.[^.]+$/, ".json")
-        );
-
         try {
           const raw = await readFile(jsonPath, "utf-8");
-          await unlink(jsonPath).catch((unlinkErr) => {
-            // Cleanup failure is non-fatal — the transcript is in-memory —
-            // but a repeated EACCES/EBUSY is a leak signal worth surfacing.
-            console.warn(
-              `[whisper] failed to unlink ${jsonPath}: ${unlinkErr}`
-            );
-          });
-          resolve(parseWhisperJson(raw));
+          const segments = parseWhisperJson(raw);
+          await cleanupWhisperOutput(jsonPath);
+          resolve(segments);
         } catch (readErr) {
+          await cleanupWhisperOutput(jsonPath);
           reject(
             new LocalTranscriptionError(
               `Failed to read transcript file: ${readErr}`,
@@ -184,4 +182,15 @@ export async function transcribeAudio(
       }
     );
   });
+}
+
+async function cleanupWhisperOutput(jsonPath: string): Promise<void> {
+  try {
+    await unlink(jsonPath);
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) {
+      return;
+    }
+    console.warn(`[whisper] failed to unlink ${jsonPath}: ${error}`);
+  }
 }

@@ -192,7 +192,8 @@ export function pickLocale(
 export async function fetchCaptions(
   youtubeUrl: string,
   lang?: string,
-  requestId?: string
+  requestId?: string,
+  signal?: AbortSignal,
 ): Promise<CaptionResult | null> {
   const videoId = extractVideoId(youtubeUrl);
   if (!videoId) return null;
@@ -202,9 +203,11 @@ export async function fetchCaptions(
     const response = await fetchTranscript(videoId, {
       videoDetails: true,
       ...(lang ? { lang } : {}),
+      ...(signal ? { signal } : {}),
     });
     result = response as TranscriptResult;
   } catch (err) {
+    signal?.throwIfAborted();
     // Strict-equality match inside the library means primary-subtag
     // requests (e.g. `"zh"`) miss region/script-tagged tracks
     // (`"zh-Hans"`). Catch that one shape and retry with the matched
@@ -224,9 +227,11 @@ export async function fetchCaptions(
         const retryResponse = await fetchTranscript(videoId, {
           videoDetails: true,
           lang: matched,
+          ...(signal ? { signal } : {}),
         });
         result = retryResponse as TranscriptResult;
       } catch (retryErr) {
+        signal?.throwIfAborted();
         if (isExpectedNoCaptions(retryErr)) return null;
         logServiceEvent("error", "captions.CAPTION_UNEXPECTED_FAILURE", {
           errorId: "CAPTION_UNEXPECTED_FAILURE",

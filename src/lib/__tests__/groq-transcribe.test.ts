@@ -119,6 +119,28 @@ describe("transcribeViaGroq", () => {
     expect(formData.get("model")).toBe("whisper-large-v3-turbo");
   });
 
+  it("uses the request work signal for compression, file I/O, and Groq fetch", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await transcribeViaGroq("/tmp/clip.mp3", undefined, controller.signal);
+
+    expect(mockedCompress).toHaveBeenCalledWith(
+      "/tmp/clip.mp3",
+      controller.signal,
+    );
+    expect(mockedReadFile).toHaveBeenCalledWith(
+      COMPRESSED_PATH,
+      expect.objectContaining({ signal: controller.signal }),
+    );
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const fetchSignal = init.signal as AbortSignal;
+    expect(fetchSignal.aborted).toBe(false);
+    controller.abort();
+    expect(fetchSignal.aborted).toBe(true);
+  });
+
   it("omits `language` from the form when no lang arg is provided", async () => {
     // Sending `language: undefined` would be rejected by Groq's strict
     // multipart parser (some shapes return 400, some silently ignore).
@@ -326,8 +348,14 @@ describe("transcribeViaGroq", () => {
 
     await transcribeViaGroq("/tmp/clip-orig.mp3");
 
-    expect(mockedCompress).toHaveBeenCalledWith("/tmp/clip-orig.mp3");
-    expect(mockedReadFile).toHaveBeenCalledWith(COMPRESSED_PATH);
+    expect(mockedCompress).toHaveBeenCalledWith(
+      "/tmp/clip-orig.mp3",
+      expect.any(AbortSignal),
+    );
+    expect(mockedReadFile).toHaveBeenCalledWith(
+      COMPRESSED_PATH,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
     expect(mockedReadFile).not.toHaveBeenCalledWith("/tmp/clip-orig.mp3");
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const formData = init.body as FormData;

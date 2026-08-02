@@ -11,6 +11,7 @@ import { LocalTranscriptionError } from "../whisper.js";
 const INPUT: TranscriptionWorkflowInput = {
   youtubeUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   language: undefined,
+  signal: new AbortController().signal,
   limits: {
     mediaMaxBytes: 50_000_000,
     mediaMaxDurationSeconds: 1_800,
@@ -49,6 +50,30 @@ describe("transcription workflow", () => {
     expect(outcome).toEqual({
       ok: true,
       segments: [{ text: "hello", start: 0, duration: 1 }],
+    });
+  });
+
+  it("passes the request work signal through every active stage", async () => {
+    const deps = dependencies();
+    const run = createTranscriptionWorkflow(deps);
+
+    await run(INPUT);
+
+    expect({
+      download: vi.mocked(deps.downloadAudio).mock.calls,
+      duration: vi.mocked(deps.probeAudioDurationSeconds).mock.calls,
+      local: vi.mocked(deps.transcribeLocally).mock.calls,
+    }).toEqual({
+      download: [
+        [
+          INPUT.youtubeUrl,
+          "/tmp/audio.mp3",
+          INPUT.limits.mediaMaxBytes,
+          INPUT.signal,
+        ],
+      ],
+      duration: [["/tmp/audio.mp3", INPUT.signal]],
+      local: [["/tmp/audio.mp3", undefined, INPUT.signal]],
     });
   });
 
@@ -240,7 +265,7 @@ describe("transcription workflow", () => {
         ok: true,
         segments: [{ text: "local result", start: 0, duration: 1 }],
       },
-      localCalls: [["/tmp/audio.mp3", undefined]],
+      localCalls: [["/tmp/audio.mp3", undefined, INPUT.signal]],
     });
   });
 

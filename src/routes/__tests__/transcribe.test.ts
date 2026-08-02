@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTranscribeRoute } from "../transcribe.js";
-import { resetResourceLimitState } from "../../lib/resource-limits.js";
 import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
@@ -37,7 +36,6 @@ function postRaw(body: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  resetResourceLimitState();
   workflow.mockReset().mockResolvedValue({
     ok: true,
     segments: [{ text: "hello", start: 0, duration: 1 }],
@@ -84,6 +82,7 @@ describe("POST /transcribe HTTP boundary", () => {
           requestId: "workflow-request-id",
           videoId: "dQw4w9WgXcQ",
         },
+        signal: expect.any(AbortSignal),
       }
     );
   });

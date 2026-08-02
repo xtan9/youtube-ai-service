@@ -5,15 +5,27 @@ import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { jsonError } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
 import { readBoundedJson } from "../lib/resource-limits.js";
+import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import { createDataRoute, type DataRouteConfig } from "./data-route.js";
 
 type CaptionsRouteConfig = DataRouteConfig;
 
+export interface CaptionsRouteDependencies {
+  fetchCaptions(
+    youtubeUrl: string,
+    lang: string | undefined,
+    requestId: string,
+    signal: AbortSignal,
+  ): ReturnType<typeof fetchCaptions>;
+}
+
 export function createCaptionsRoute(
   config: CaptionsRouteConfig,
+  dependencies: CaptionsRouteDependencies = { fetchCaptions },
+  admission?: ResourceAdmission,
 ): Hono<ServiceEnv> {
-  const captions = createDataRoute("captions", config);
+  const captions = createDataRoute("captions", config, admission);
 
   const requestSchema = z.object({
     youtube_url: youtubeUrlSchema,
@@ -29,6 +41,7 @@ export function createCaptionsRoute(
     const bodyResult = await readBoundedJson(
       c.req.raw,
       c.get("resourceLimits").requestBodyMaxBytes,
+      c.get("workSignal"),
     );
     if (!bodyResult.ok && bodyResult.reason === "too_large") {
       return jsonError(
@@ -64,7 +77,12 @@ export function createCaptionsRoute(
         videoId,
         lang,
       });
-      const result = await fetchCaptions(youtube_url, lang, c.get("requestId"));
+      const result = await dependencies.fetchCaptions(
+        youtube_url,
+        lang,
+        c.get("requestId"),
+        c.get("workSignal"),
+      );
 
       // Status contract this route owes its consumers:
       //   200 — captions extracted, fallback path not needed
@@ -95,6 +113,7 @@ export function createCaptionsRoute(
           .trim(),
       });
     } catch (err) {
+      c.get("workSignal").throwIfAborted();
       logServiceEvent("error", "captions.failed", {
         requestId: c.get("requestId"),
         errorId: "CAPTIONS_FAILED",

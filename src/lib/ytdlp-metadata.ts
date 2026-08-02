@@ -39,12 +39,14 @@ export function buildYtdlpMetadataArgs(
  * visible rather than silently collapsing to "no language signal".
  */
 export function createYtdlpMetadataFetcher(config: MediaAcquisitionConfig) {
-  return (url: string) => fetchYtdlpMetadataWithConfig(config, url);
+  return (url: string, signal?: AbortSignal) =>
+    fetchYtdlpMetadataWithConfig(config, url, signal);
 }
 
 async function fetchYtdlpMetadataWithConfig(
   config: MediaAcquisitionConfig,
-  url: string
+  url: string,
+  signal?: AbortSignal,
 ): Promise<YtdlpMetadata> {
   const args = buildYtdlpMetadataArgs(url, config);
 
@@ -52,7 +54,11 @@ async function fetchYtdlpMetadataWithConfig(
     execFile(
       "yt-dlp",
       args,
-      { timeout: YTDLP_METADATA_TIMEOUT_MS, maxBuffer: 20 * 1024 * 1024 },
+      {
+        timeout: YTDLP_METADATA_TIMEOUT_MS,
+        maxBuffer: 20 * 1024 * 1024,
+        signal,
+      },
       (error, out, stderr) => {
         if (error) {
           reject(new Error(`yt-dlp metadata failed: ${stderr || error.message}`));

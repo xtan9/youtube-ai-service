@@ -1,13 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { createCaptionsRoute } from "../captions.js";
-import * as captionsLib from "../../lib/captions.js";
+import {
+  createCaptionsRoute,
+  type CaptionsRouteDependencies,
+} from "../captions.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 // All route tests run with a valid VPS_API_KEY in env — the auth path is
 // also exercised via a dedicated block below.
 const VALID_KEY = "test-key";
+const captionsDependencies: CaptionsRouteDependencies = {
+  fetchCaptions: vi.fn(),
+};
 const captions = createCaptionsRoute(
-  createTestRuntimeConfig({ apiKeys: [VALID_KEY] })
+  createTestRuntimeConfig({ apiKeys: [VALID_KEY] }),
+  captionsDependencies,
 );
 
 function post(body: unknown, path = "/") {
@@ -24,6 +30,7 @@ function post(body: unknown, path = "/") {
 describe("POST /captions", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(captionsDependencies.fetchCaptions).mockReset();
   });
 
   it("rejects malformed bodies with 400", async () => {
@@ -56,7 +63,7 @@ describe("POST /captions", () => {
     // 500 — on 404 it proceeds to /transcribe silently; on 500 it
     // surfaces an error. If these ever get merged, expect either
     // unnecessary alert storms or silently-swallowed bugs.
-    vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(null);
+    vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(null);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
@@ -85,7 +92,7 @@ describe("POST /captions", () => {
       title: "test video",
       channelName: "test channel",
     };
-    vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(mockResult);
+    vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(mockResult);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     });
@@ -102,7 +109,7 @@ describe("POST /captions", () => {
     // would otherwise see a different value for the same video during the
     // rollout window. The route preserves the legacy normalization on the
     // derived string while keeping the segments themselves verbatim.
-    vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue({
+    vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue({
       segments: [
         { text: "  hello\tworld  ", start: 0, duration: 1 },
         { text: "\n\n  foo  ", start: 1, duration: 1 },
@@ -125,7 +132,7 @@ describe("POST /captions", () => {
     // client so raw internals aren't echoed into the browser; the real
     // error stays in logs.
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(captionsLib, "fetchCaptions").mockRejectedValue(
+    vi.spyOn(captionsDependencies, "fetchCaptions").mockRejectedValue(
       new Error("internal-library-stack-trace-would-leak-here")
     );
     const res = await post({
@@ -146,7 +153,7 @@ describe("POST /captions", () => {
     // fetchCaptions — the route still awaits it so a sync throw still
     // routes through the catch.
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(captionsLib, "fetchCaptions").mockImplementation(() => {
+    vi.spyOn(captionsDependencies, "fetchCaptions").mockImplementation(() => {
       throw new Error("sync-throw");
     });
     const res = await post({
@@ -160,7 +167,7 @@ describe("POST /captions", () => {
     // the zod schema but silently dropped before reaching the library,
     // leaving the `tracks[0]` bug unfixed.
     const spy = vi
-      .spyOn(captionsLib, "fetchCaptions")
+      .spyOn(captionsDependencies, "fetchCaptions")
       .mockResolvedValue(null);
     await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -169,13 +176,14 @@ describe("POST /captions", () => {
     expect(spy).toHaveBeenCalledWith(
       expect.any(String),
       "fr",
-      expect.any(String)
+      expect.any(String),
+      expect.any(AbortSignal),
     );
   });
 
   it("omits `lang` when the caller didn't send one (back-compat)", async () => {
     const spy = vi
-      .spyOn(captionsLib, "fetchCaptions")
+      .spyOn(captionsDependencies, "fetchCaptions")
       .mockResolvedValue(null);
     await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -186,7 +194,8 @@ describe("POST /captions", () => {
     expect(spy).toHaveBeenCalledWith(
       expect.any(String),
       undefined,
-      expect.any(String)
+      expect.any(String),
+      expect.any(AbortSignal),
     );
   });
 
@@ -218,7 +227,7 @@ describe("POST /captions", () => {
     ["zh-Hans"],
     ["zh-Hant-TW"],
   ])("accepts well-formed BCP-47 / ISO 639 tag: %s", async (lang) => {
-    vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(null);
+    vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(null);
     const res = await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
       lang,

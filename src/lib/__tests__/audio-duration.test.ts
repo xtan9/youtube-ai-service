@@ -41,6 +41,17 @@ describe("probeAudioDurationSeconds", () => {
     expect(await probeAudioDurationSeconds("/tmp/clip.mp3")).toBe(139.32);
   });
 
+  it("passes the request work signal to ffprobe", async () => {
+    const signal = new AbortController().signal;
+    mockExecStdout(JSON.stringify({ format: { duration: "1" } }));
+
+    await probeAudioDurationSeconds("/tmp/clip.mp3", signal);
+
+    expect(mockedExecFile.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ signal }),
+    );
+  });
+
   it("returns null when ffprobe exits non-zero (caller fails closed)", async () => {
     // The route uses null → 'unknown, treat as too long for fallback'.
     // Throwing instead would promote a transient ffprobe blip into a 500.

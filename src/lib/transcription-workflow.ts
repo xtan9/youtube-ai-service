@@ -33,6 +33,7 @@ function isOperationalCompressKind(kind: AudioCompressKind): boolean {
 export interface TranscriptionWorkflowInput {
   youtubeUrl: string;
   language?: string;
+  signal: AbortSignal;
   limits: {
     mediaMaxBytes: number;
     mediaMaxDurationSeconds: number;
@@ -64,17 +65,23 @@ export interface TranscriptionWorkflowDependencies {
   downloadAudio(
     youtubeUrl: string,
     audioPath: string,
-    maxBytes: number
+    maxBytes: number,
+    signal: AbortSignal,
   ): Promise<void>;
   cleanupAudio(audioPath: string): Promise<void>;
-  probeAudioDurationSeconds(audioPath: string): Promise<number | null>;
+  probeAudioDurationSeconds(
+    audioPath: string,
+    signal: AbortSignal,
+  ): Promise<number | null>;
   transcribeViaGroq(
     audioPath: string,
-    language?: string
+    language: string | undefined,
+    signal: AbortSignal,
   ): Promise<{ segments: TranscriptSegment[]; language: string }>;
   transcribeLocally(
     audioPath: string,
-    language?: string
+    language: string | undefined,
+    signal: AbortSignal,
   ): Promise<TranscriptSegment[]>;
   isGroqConfigured(): boolean;
   readLocalFallbackMaxSeconds(): number;
@@ -108,14 +115,18 @@ export function createTranscriptionWorkflow(
         await dependencies.downloadAudio(
           input.youtubeUrl,
           audioPath,
-          input.limits.mediaMaxBytes
+          input.limits.mediaMaxBytes,
+          input.signal,
         );
         dependencies.logEvent("info", "transcribe.audio_downloaded", {
           ...correlation,
         });
 
         const audioSeconds =
-          await dependencies.probeAudioDurationSeconds(audioPath);
+          await dependencies.probeAudioDurationSeconds(
+            audioPath,
+            input.signal,
+          );
         if (audioSeconds === null) {
           dependencies.logEvent(
             "warn",
@@ -154,12 +165,17 @@ export function createTranscriptionWorkflow(
           }
           segments = await dependencies.transcribeLocally(
             audioPath,
-            input.language
+            input.language,
+            input.signal,
           );
         } else {
           try {
             segments = (
-              await dependencies.transcribeViaGroq(audioPath, input.language)
+              await dependencies.transcribeViaGroq(
+                audioPath,
+                input.language,
+                input.signal,
+              )
             ).segments;
           } catch (error) {
             if (!(error instanceof GroqTranscribeError)) throw error;
@@ -195,7 +211,8 @@ export function createTranscriptionWorkflow(
             });
             segments = await dependencies.transcribeLocally(
               audioPath,
-              input.language
+              input.language,
+              input.signal,
             );
           }
         }
@@ -224,6 +241,7 @@ export function createTranscriptionWorkflow(
         }
       }
     } catch (error) {
+      input.signal.throwIfAborted();
       if (error instanceof AudioMediaLimitError) {
         dependencies.logEvent("info", "transcribe.MEDIA_SIZE_EXCEEDED", {
           errorId: "MEDIA_SIZE_EXCEEDED",

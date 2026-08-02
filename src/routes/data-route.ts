@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import {
-  resourceLimitMiddleware,
+  createResourceAdmission,
+  type ResourceAdmission,
   type ResourceLimitEndpoint,
 } from "../lib/resource-limits.js";
 import { requestIdMiddleware, type ServiceEnv } from "../lib/request-id.js";
@@ -12,10 +13,11 @@ export type DataRouteConfig = Pick<RuntimeConfig, "auth" | "admission">;
 export function createDataRoute(
   endpoint: ResourceLimitEndpoint,
   config: DataRouteConfig,
+  admission: ResourceAdmission = createResourceAdmission(config.admission),
 ): Hono<ServiceEnv> {
   const route = new Hono<ServiceEnv>();
   route.use("*", requestIdMiddleware);
   route.use("*", createAuthMiddleware(config.auth));
-  route.use("*", resourceLimitMiddleware(endpoint, config.admission));
+  route.use("*", admission.middleware(endpoint));
   return route;
 }
