@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import { z } from "zod";
 import { fetchCaptions, extractVideoId } from "../lib/captions.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
-import { jsonError } from "../lib/http-errors.js";
+import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
 import { readBoundedJson } from "../lib/resource-limits.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
@@ -44,23 +44,18 @@ export function createCaptionsRoute(
       c.get("workSignal"),
     );
     if (!bodyResult.ok && bodyResult.reason === "too_large") {
-      return jsonError(
-        c,
-        413,
-        "Request body too large",
-        "REQUEST_BODY_TOO_LARGE",
-      );
+      return respondWithOperationalOutcome(c, "request-body-too-large");
     }
     if (!bodyResult.ok) {
       // Hono returns 500 by default on malformed JSON; explicit 400
       // signals "client error" so the frontend doesn't trigger retry or
       // alerting.
-      return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
+      return respondWithOperationalOutcome(c, "invalid-json");
     }
 
     const parsed = requestSchema.safeParse(bodyResult.value);
     if (!parsed.success) {
-      return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
+      return respondWithOperationalOutcome(c, "invalid-request");
     }
 
     const { youtube_url, lang } = parsed.data;
@@ -91,7 +86,7 @@ export function createCaptionsRoute(
       //   500 — unexpected library/network failure (alert, do not fall back
       //         silently since that masks real problems behind compute bills)
       if (!result) {
-        return jsonError(c, 404, "no_captions", "CAPTIONS_NOT_FOUND");
+        return respondWithOperationalOutcome(c, "captions-not-found");
       }
 
       // Wire response carries `segments` (the canonical shape consumed by
@@ -114,13 +109,10 @@ export function createCaptionsRoute(
       });
     } catch (err) {
       c.get("workSignal").throwIfAborted();
-      logServiceEvent("error", "captions.failed", {
-        requestId: c.get("requestId"),
-        errorId: "CAPTIONS_FAILED",
+      return respondWithOperationalOutcome(c, "captions-failed", {
         videoId,
         errorName: err instanceof Error ? err.name : "unknown",
       });
-      return jsonError(c, 500, "Internal error", "CAPTIONS_FAILED");
     }
   });
 

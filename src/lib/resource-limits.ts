@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
-import { jsonError } from "./http-errors.js";
-import { logServiceEvent } from "./observability.js";
+import { respondWithOperationalOutcome } from "./http-errors.js";
 import type { ServiceEnv } from "./request-id.js";
 import type { AdmissionConfig } from "./runtime-config.js";
 
@@ -137,23 +136,17 @@ export function createResourceAdmission(
 
       const keyFingerprint = c.get("apiKeyFingerprint");
       if (!keyFingerprint || !consumeRateLimit(keyFingerprint)) {
-        logServiceEvent("warn", "resource_limits.rate_limited", {
-          errorId: "RATE_LIMITED",
-          requestId: c.get("requestId"),
+        return respondWithOperationalOutcome(c, "rate-limited", {
           stage: endpoint,
         });
-        return jsonError(c, 429, "Too many requests", "RATE_LIMITED");
       }
 
       const releaseJob =
         endpoint === "transcribe" ? tryAcquireTranscriptionJob() : null;
       if (endpoint === "transcribe" && !releaseJob) {
-        logServiceEvent("warn", "resource_limits.concurrency_limited", {
-          errorId: "TRANSCRIPTION_BUSY",
-          requestId: c.get("requestId"),
+        return respondWithOperationalOutcome(c, "transcription-busy", {
           stage: endpoint,
         });
-        return jsonError(c, 429, "Transcription busy", "TRANSCRIPTION_BUSY");
       }
 
       const deadlineController = new AbortController();
@@ -190,17 +183,9 @@ export function createResourceAdmission(
       if (outcome === "timeout") {
         await completion.catch(() => undefined);
         releaseJob?.();
-        logServiceEvent("warn", "resource_limits.endpoint_timeout", {
-          errorId: "ENDPOINT_TIMEOUT",
-          requestId: c.get("requestId"),
+        const response = respondWithOperationalOutcome(c, "endpoint-timeout", {
           stage: endpoint,
         });
-        const response = jsonError(
-          c,
-          504,
-          "Transcription service timed out",
-          "ENDPOINT_TIMEOUT",
-        );
         c.res = response;
         return response;
       }
