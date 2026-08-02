@@ -8,7 +8,7 @@ import {
 } from "../lib/language-detect.js";
 import { extractVideoId } from "../lib/captions.js";
 import { youtubeUrlSchema } from "../lib/youtube-url.js";
-import { jsonError } from "../lib/http-errors.js";
+import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
 import { readBoundedJson } from "../lib/resource-limits.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
@@ -43,22 +43,17 @@ export function createMetadataRoute(
       c.get("workSignal"),
     );
     if (!bodyResult.ok && bodyResult.reason === "too_large") {
-      return jsonError(
-        c,
-        413,
-        "Request body too large",
-        "REQUEST_BODY_TOO_LARGE",
-      );
+      return respondWithOperationalOutcome(c, "request-body-too-large");
     }
     if (!bodyResult.ok) {
       // Explicit 400 so malformed bodies are client errors, not 500s. Same
       // convention as /captions and /transcribe.
-      return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
+      return respondWithOperationalOutcome(c, "invalid-json");
     }
 
     const parsed = requestSchema.safeParse(bodyResult.value);
     if (!parsed.success) {
-      return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
+      return respondWithOperationalOutcome(c, "invalid-request");
     }
 
     const { youtube_url } = parsed.data;
@@ -118,13 +113,10 @@ export function createMetadataRoute(
       c.get("workSignal").throwIfAborted();
       // Generic client-facing message; full yt-dlp stderr stays in server
       // logs. Mirrors the /transcribe and /captions error-handling shape.
-      logServiceEvent("error", "metadata.failed", {
-        requestId: c.get("requestId"),
-        errorId: "METADATA_FAILED",
+      return respondWithOperationalOutcome(c, "metadata-failed", {
         videoId,
         errorName: err instanceof Error ? err.name : "unknown",
       });
-      return jsonError(c, 500, "Metadata fetch failed", "METADATA_FAILED");
     }
   });
 

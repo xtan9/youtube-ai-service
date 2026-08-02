@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { z } from "zod";
 import { extractVideoId } from "../lib/captions.js";
-import { jsonError } from "../lib/http-errors.js";
+import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { readBoundedJson } from "../lib/resource-limits.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
@@ -39,20 +39,15 @@ export function createTranscribeRoute(
       c.get("workSignal"),
     );
     if (!bodyResult.ok && bodyResult.reason === "too_large") {
-      return jsonError(
-        c,
-        413,
-        "Request body too large",
-        "REQUEST_BODY_TOO_LARGE",
-      );
+      return respondWithOperationalOutcome(c, "request-body-too-large");
     }
     if (!bodyResult.ok) {
-      return jsonError(c, 400, "Invalid JSON body", "INVALID_JSON");
+      return respondWithOperationalOutcome(c, "invalid-json");
     }
 
     const parsed = requestSchema.safeParse(bodyResult.value);
     if (!parsed.success) {
-      return jsonError(c, 400, "Invalid request", "INVALID_REQUEST");
+      return respondWithOperationalOutcome(c, "invalid-request");
     }
 
     const { youtube_url: youtubeUrl, lang } = parsed.data;
@@ -75,54 +70,7 @@ export function createTranscribeRoute(
       });
 
       if (!outcome.ok) {
-        switch (outcome.reason) {
-          case "media-size-exceeded":
-            return jsonError(
-              c,
-              413,
-              "Video exceeds the processing limit",
-              "MEDIA_SIZE_EXCEEDED",
-            );
-          case "media-duration-unknown":
-            return jsonError(
-              c,
-              503,
-              "Video duration could not be determined",
-              "MEDIA_DURATION_UNKNOWN",
-            );
-          case "media-duration-exceeded":
-            return jsonError(
-              c,
-              413,
-              "Video exceeds the processing limit",
-              "MEDIA_DURATION_EXCEEDED",
-            );
-          case "temporarily-unavailable":
-            return jsonError(
-              c,
-              503,
-              "Transcription temporarily unavailable",
-              "TRANSCRIPTION_TEMPORARILY_UNAVAILABLE",
-            );
-          case "empty-result":
-            return jsonError(
-              c,
-              500,
-              "Transcription produced no content",
-              "TRANSCRIPTION_EMPTY_RESULT",
-            );
-          case "transcription-failed":
-            return jsonError(
-              c,
-              500,
-              "Transcription failed",
-              "TRANSCRIPTION_FAILED",
-            );
-          default: {
-            const _exhaustive: never = outcome.reason;
-            return _exhaustive;
-          }
-        }
+        return respondWithOperationalOutcome(c, outcome.reason);
       }
 
       const { segments } = outcome;
@@ -142,7 +90,7 @@ export function createTranscribeRoute(
       c.get("workSignal").throwIfAborted();
       // The workflow has already emitted a safe failure event with correlation
       // data. The HTTP boundary deliberately exposes no implementation detail.
-      return jsonError(c, 500, "Transcription failed", "TRANSCRIPTION_FAILED");
+      return respondWithOperationalOutcome(c, "transcription-failed");
     }
   });
 
