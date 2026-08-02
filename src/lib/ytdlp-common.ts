@@ -1,3 +1,5 @@
+import type { MediaAcquisitionConfig } from "./runtime-config.js";
+
 // Flags and constants shared between yt-dlp invocations (audio download,
 // metadata dump). Extracted so `buildYtdlpArgs` and `buildYtdlpMetadataArgs`
 // can't drift out of sync — a player_client or PO Token change made in one
@@ -20,20 +22,20 @@ export const SAFARI_USER_AGENT =
 // extraction paths — without this, requests fail regardless of IP
 // reputation or cookie state. Override via env for local dev or if the
 // sidecar's bind address changes.
-export const POT_PROVIDER_URL =
-  process.env.POT_PROVIDER_URL ?? "http://127.0.0.1:4416";
 
 /**
  * Common flags every yt-dlp invocation shares: playlist guard, YouTube
  * extractor tweaks (player_client + PO Token), and the matched User-Agent.
  */
-export function buildYtdlpCommonArgs(): string[] {
+export function buildYtdlpCommonArgs(
+  config: MediaAcquisitionConfig
+): string[] {
   return [
     "--no-playlist",
     "--extractor-args",
     `youtube:player_client=${YOUTUBE_PLAYER_CLIENTS}`,
     "--extractor-args",
-    `youtubepot-bgutilhttp:base_url=${POT_PROVIDER_URL}`,
+    `youtubepot-bgutilhttp:base_url=${config.potProviderUrl}`,
     "--user-agent",
     SAFARI_USER_AGENT,
   ];

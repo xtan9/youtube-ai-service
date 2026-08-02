@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fixturesJson from "../../../test-fixtures/transcription-contract/v1/cases.json";
-import { captions } from "../captions.js";
-import { metadata } from "../metadata.js";
-import { transcribe } from "../transcribe.js";
+import { createCaptionsRoute } from "../captions.js";
+import {
+  createMetadataRoute,
+  type MetadataRouteDependencies,
+} from "../metadata.js";
+import { createTranscribeRoute } from "../transcribe.js";
 import * as captionsLib from "../../lib/captions.js";
 import type { CaptionResult, TranscriptSegment } from "../../lib/captions.js";
-import * as ytdlpMetadataLib from "../../lib/ytdlp-metadata.js";
 import type { YtdlpMetadata } from "../../lib/language-detect.js";
-import * as transcriptionWorkflow from "../../lib/transcription-workflow.js";
+import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
+import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 type WireResponse = {
   status: number;
@@ -53,6 +56,14 @@ type ContractFixtures = {
 
 const fixtures = fixturesJson as unknown as ContractFixtures;
 const VALID_KEY = "fixture-key";
+const testConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
+const captions = createCaptionsRoute(testConfig);
+const metadataDependencies: MetadataRouteDependencies = {
+  fetchMetadata: vi.fn(),
+};
+const metadata = createMetadataRoute(testConfig, metadataDependencies);
+const workflow = vi.fn<TranscriptionWorkflow>();
+const transcribe = createTranscribeRoute(testConfig, workflow);
 
 type RequestableRoute = {
   request(path: string, init: RequestInit): Response | Promise<Response>;
@@ -159,11 +170,8 @@ describe("transcription-http/v1 fixture manifest", () => {
 describe("service routes against transcription-http/v1 fixtures", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    process.env.VPS_API_KEY = VALID_KEY;
-    vi.spyOn(
-      transcriptionWorkflow,
-      "runTranscriptionWorkflow"
-    ).mockResolvedValue({ ok: true, segments: [] });
+    vi.mocked(metadataDependencies.fetchMetadata).mockReset();
+    workflow.mockReset().mockResolvedValue({ ok: true, segments: [] });
   });
 
   it.each([
@@ -173,7 +181,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
   ])("serves the %s metadata fixture at the HTTP boundary", async (id) => {
     const fixture = getCase(id);
     const value = fixture.service?.arrange?.value as YtdlpMetadata;
-    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue(value);
+    vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue(value);
 
     const response = await post(
       metadata,
@@ -246,7 +254,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
     const fixture = getCase(id);
     const arrangement = fixture.service?.arrange;
     const segments = (arrangement?.value ?? []) as TranscriptSegment[];
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue(
+    workflow.mockResolvedValue(
       segments.length > 0
         ? { ok: true, segments }
         : { ok: false, reason: "empty-result" }
@@ -266,7 +274,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
 
   it("serves the transcription-503 fixture without falling back to local Whisper", async () => {
     const fixture = getCase("transcription-503");
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+    workflow.mockResolvedValue({
       ok: false,
       reason: "temporarily-unavailable",
     });

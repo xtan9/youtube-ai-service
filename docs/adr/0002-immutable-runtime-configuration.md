@@ -1,0 +1,3 @@
+# Build one immutable runtime-configuration snapshot at startup
+
+The service previously parsed environment variables independently in auth, admission, transcription, yt-dlp, and server modules, while tests and Docker Compose supplied competing defaults. We now validate environment input once before listening, build a deeply immutable typed snapshot, and pass consumer-specific slices through app and adapter factories. Configuration changes require a process restart; in exchange, every request in a process observes the same validated policy, tests avoid global environment mutation, and application defaults have one owner.

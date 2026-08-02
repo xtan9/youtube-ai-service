@@ -10,8 +10,12 @@ vi.mock("child_process", () => ({
 }));
 
 import { execFile } from "child_process";
-import { metadata } from "../metadata.js";
-import * as ytdlpMetadataLib from "../../lib/ytdlp-metadata.js";
+import {
+  createMetadataRoute,
+  type MetadataRouteDependencies,
+} from "../metadata.js";
+import { createYtdlpMetadataFetcher } from "../../lib/ytdlp-metadata.js";
+import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 const mockedExecFile = vi.mocked(execFile);
 const mockExecStdout = (stdout: string) => {
@@ -24,6 +28,11 @@ const mockExecStdout = (stdout: string) => {
 };
 
 const VALID_KEY = "test-key";
+const metadataConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
+const metadataDependencies: MetadataRouteDependencies = {
+  fetchMetadata: createYtdlpMetadataFetcher(metadataConfig.mediaAcquisition),
+};
+const metadata = createMetadataRoute(metadataConfig, metadataDependencies);
 
 function post(body: unknown) {
   return metadata.request("/", {
@@ -39,7 +48,6 @@ function post(body: unknown) {
 describe("POST /metadata", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    process.env.VPS_API_KEY = VALID_KEY;
   });
 
   it("rejects malformed bodies with 400", async () => {
@@ -66,7 +74,7 @@ describe("POST /metadata", () => {
 
   it("returns 200 with language, title, description, duration, availableCaptions on happy path", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
+    vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue({
       title: "Comment apprendre",
       description: "Une vidéo en français",
       language: "fr",
@@ -98,7 +106,7 @@ describe("POST /metadata", () => {
     // `null` must be forwarded verbatim — coercing to 0 here would break
     // any "video too long?" gate by silently passing it. Live streams
     // emit duration=null; same shape applies to schema gaps.
-    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
+    vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue({
       title: "Live",
       description: "",
       language: "en",
@@ -122,7 +130,7 @@ describe("POST /metadata", () => {
     // refactor that drops the log fails this test instead of silently
     // hiding a rising fallback rate.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockResolvedValue({
+    vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue({
       title: "", // no title and no description = no detection signal at all
       description: "",
       language: null,
@@ -150,7 +158,7 @@ describe("POST /metadata", () => {
     // Internal stderr (paths, binary names, extractor internals) must not
     // leak to the client — same contract as /captions and /transcribe.
     vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata").mockRejectedValue(
+    vi.spyOn(metadataDependencies, "fetchMetadata").mockRejectedValue(
       new Error("yt-dlp metadata failed: /opt/tmp/internal/path/leaked")
     );
     const res = await post({
@@ -176,11 +184,10 @@ describe("POST /metadata — normalizer is on the route's code path", () => {
   // even when nothing connects them.
   beforeEach(() => {
     // restoreAllMocks (not just clearAllMocks) — the previous describe
-    // block leaves a `vi.spyOn(ytdlpMetadataLib, "fetchYtdlpMetadata")`
+    // block leaves a `vi.spyOn(metadataDependencies, "fetchMetadata")`
     // in place that would shadow the real call path these tests are
     // designed to exercise.
     vi.restoreAllMocks();
-    process.env.VPS_API_KEY = VALID_KEY;
   });
 
   it("collapses negative duration to null on the wire", async () => {
@@ -225,7 +232,6 @@ describe("POST /metadata — normalizer is on the route's code path", () => {
 
 describe("POST /metadata — auth enforcement", () => {
   beforeEach(() => {
-    process.env.VPS_API_KEY = VALID_KEY;
     vi.restoreAllMocks();
   });
 

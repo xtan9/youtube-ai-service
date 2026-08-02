@@ -33,9 +33,10 @@ services:
     # Port 3001 is bound here because youtube-ai-service shares this
     # container's network namespace — published ports must be declared on
     # the namespace-owner, not the service using `network_mode: service:...`.
-    # Keep in sync with the app's internal PORT env.
+    # HOST_PORT controls only the published host port. The container target
+    # is the image contract; the app owns its matching internal default.
     ports:
-      - "${PORT:-3001}:3001"
+      - "${HOST_PORT:-3001}:3001"
     healthcheck:
       # Two-stage check: tailscaled must be authenticated AND the exit node
       # must respond to a WireGuard ping. `tailscale status` alone returns
@@ -71,7 +72,11 @@ services:
       # Verifies the HTTP listener on :4416 is actually accepting requests.
       # `service_started` alone fires the instant the process forks — the
       # port may not be bound yet, causing the first yt-dlp call to race.
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:4416/ping', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "require(''http'').get(''http://127.0.0.1:4416/ping'', r => process.exit(r.statusCode === 200 ? 0 : 1)).on(''error'', () => process.exit(1))"',
+        ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -94,30 +99,31 @@ services:
         condition: service_healthy
     environment:
       - VPS_API_KEY=${VPS_API_KEY}
-      # `${X:-}` keeps the env unset (not literally "undefined") when the
-      # operator hasn't configured the optional knobs — the route's
-      # default values then apply. GROQ_API_KEY itself is exposed as
-      # blank if missing so the GROQ_API_KEY_MISSING branch fires
-      # cleanly rather than seeing a literal "undefined".
+      - VPS_API_KEY_PREVIOUS=${VPS_API_KEY_PREVIOUS:-}
+      # Compose transports optional overrides; the app owns their defaults,
+      # parsing, and startup validation.
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - GROQ_MODEL=${GROQ_MODEL:-}
       - GROQ_TIMEOUT_MS=${GROQ_TIMEOUT_MS:-}
       - GROQ_LOCAL_FALLBACK_MAX_SECONDS=${GROQ_LOCAL_FALLBACK_MAX_SECONDS:-}
-      # Resource and timeout limits are required by the app's fail-closed
-      # middleware. Safe defaults keep an older VPS .env compatible after an
-      # upgrade; operators can override every value from .env.
-      - MAX_REQUEST_BODY_BYTES=${MAX_REQUEST_BODY_BYTES-65536}
-      - MAX_MEDIA_SIZE_BYTES=${MAX_MEDIA_SIZE_BYTES-50000000}
-      - MAX_MEDIA_DURATION_SECONDS=${MAX_MEDIA_DURATION_SECONDS-1800}
-      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS-60000}
-      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS-60}
-      - MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS-2}
-      - METADATA_TIMEOUT_MS=${METADATA_TIMEOUT_MS-30000}
-      - CAPTIONS_TIMEOUT_MS=${CAPTIONS_TIMEOUT_MS-30000}
-      - TRANSCRIBE_TIMEOUT_MS=${TRANSCRIBE_TIMEOUT_MS-300000}
-      - PORT=3001
+      - POT_PROVIDER_URL=${POT_PROVIDER_URL:-}
+      # Blank optional settings select the app-owned defaults. Explicitly
+      # supplied invalid values stop startup before the HTTP port opens.
+      - MAX_REQUEST_BODY_BYTES=${MAX_REQUEST_BODY_BYTES:-}
+      - MAX_MEDIA_SIZE_BYTES=${MAX_MEDIA_SIZE_BYTES:-}
+      - MAX_MEDIA_DURATION_SECONDS=${MAX_MEDIA_DURATION_SECONDS:-}
+      - RATE_LIMIT_WINDOW_MS=${RATE_LIMIT_WINDOW_MS:-}
+      - RATE_LIMIT_MAX_REQUESTS=${RATE_LIMIT_MAX_REQUESTS:-}
+      - MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS:-}
+      - METADATA_TIMEOUT_MS=${METADATA_TIMEOUT_MS:-}
+      - CAPTIONS_TIMEOUT_MS=${CAPTIONS_TIMEOUT_MS:-}
+      - TRANSCRIBE_TIMEOUT_MS=${TRANSCRIBE_TIMEOUT_MS:-}
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3001/health').then(r => process.exit(r.ok ? 0 : 1))\""]
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://localhost:3001/health'').then(r => process.exit(r.ok ? 0 : 1))"',
+        ]
       interval: 30s
       timeout: 5s
       retries: 3

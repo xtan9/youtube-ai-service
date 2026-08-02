@@ -1,17 +1,43 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { captions } from "../captions.js";
-import { metadata } from "../metadata.js";
-import { transcribe } from "../transcribe.js";
+import { createCaptionsRoute } from "../captions.js";
+import {
+  createMetadataRoute,
+  type MetadataRouteDependencies,
+} from "../metadata.js";
+import { createTranscribeRoute } from "../transcribe.js";
 import * as captionsLib from "../../lib/captions.js";
-import * as metadataLib from "../../lib/ytdlp-metadata.js";
-import * as transcriptionWorkflow from "../../lib/transcription-workflow.js";
+import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
 import { resetResourceLimitState } from "../../lib/resource-limits.js";
+import type { AdmissionConfig } from "../../lib/runtime-config.js";
+import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 const VALID_KEY = "resource-limit-test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+const workflowMock = vi.fn<TranscriptionWorkflow>();
+const metadataDependencies: MetadataRouteDependencies = {
+  fetchMetadata: vi.fn(),
+};
+
+function createRoutes(
+  admission: Partial<Omit<AdmissionConfig, "endpointTimeoutMs">> & {
+    endpointTimeoutMs?: Partial<AdmissionConfig["endpointTimeoutMs"]>;
+  } = {}
+) {
+  const config = createTestRuntimeConfig({
+    apiKeys: [VALID_KEY],
+    admission,
+  });
+  return {
+    captions: createCaptionsRoute(config),
+    metadata: createMetadataRoute(config, metadataDependencies),
+    transcribe: createTranscribeRoute(config, workflowMock),
+  };
+}
+
+type RequestableRoute = ReturnType<typeof createMetadataRoute>;
 
 function post(
-  route: typeof metadata | typeof captions | typeof transcribe,
+  route: RequestableRoute,
   body: unknown,
   init: RequestInit = {}
 ) {
@@ -30,31 +56,18 @@ function post(
 beforeEach(() => {
   vi.restoreAllMocks();
   resetResourceLimitState();
-  process.env.VPS_API_KEY = VALID_KEY;
-  process.env.MAX_REQUEST_BODY_BYTES = "65536";
-  process.env.MAX_MEDIA_SIZE_BYTES = "50000000";
-  process.env.MAX_MEDIA_DURATION_SECONDS = "1800";
-  process.env.RATE_LIMIT_WINDOW_MS = "60000";
-  process.env.RATE_LIMIT_MAX_REQUESTS = "1000";
-  process.env.MAX_CONCURRENT_JOBS = "8";
-  process.env.METADATA_TIMEOUT_MS = "30000";
-  process.env.CAPTIONS_TIMEOUT_MS = "30000";
-  process.env.TRANSCRIBE_TIMEOUT_MS = "300000";
-  delete process.env.GROQ_API_KEY;
-  vi.spyOn(
-    transcriptionWorkflow,
-    "runTranscriptionWorkflow"
-  ).mockResolvedValue({
+  workflowMock.mockReset().mockResolvedValue({
     ok: true,
     segments: [{ text: "ok", start: 0, duration: 1 }],
   });
+  vi.mocked(metadataDependencies.fetchMetadata).mockReset();
 });
 
 describe("transcription resource limits", () => {
   it("rejects an oversized JSON body before invoking the provider", async () => {
-    process.env.MAX_REQUEST_BODY_BYTES = "64";
+    const { metadata } = createRoutes({ requestBodyMaxBytes: 64 });
     const provider = vi
-      .spyOn(metadataLib, "fetchYtdlpMetadata")
+      .spyOn(metadataDependencies, "fetchMetadata")
       .mockResolvedValue({
         title: "unused",
         description: "",
@@ -77,31 +90,8 @@ describe("transcription resource limits", () => {
     expect(provider).not.toHaveBeenCalled();
   });
 
-  it("fails closed when a required limit is missing", async () => {
-    delete process.env.MAX_MEDIA_DURATION_SECONDS;
-
-    const response = await post(metadata, { youtube_url: VIDEO_URL });
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
-      error: "Service temporarily unavailable",
-      errorId: "SERVICE_LIMITS_MISCONFIGURED",
-    });
-  });
-
-  it("fails closed when a byte or concurrency limit is fractional", async () => {
-    process.env.MAX_CONCURRENT_JOBS = "0.5";
-
-    const response = await post(metadata, { youtube_url: VIDEO_URL });
-
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
-      errorId: "SERVICE_LIMITS_MISCONFIGURED",
-    });
-  });
-
   it("rate-limits each authenticated key without leaking key material", async () => {
-    process.env.RATE_LIMIT_MAX_REQUESTS = "1";
+    const { captions } = createRoutes({ rateLimitMaxRequests: 1 });
     vi.spyOn(captionsLib, "fetchCaptions").mockResolvedValue(null);
 
     const first = await post(captions, { youtube_url: VIDEO_URL });
@@ -119,10 +109,12 @@ describe("transcription resource limits", () => {
   });
 
   it("rejects a second transcription while the job limit is occupied", async () => {
-    process.env.MAX_CONCURRENT_JOBS = "1";
-    process.env.RATE_LIMIT_MAX_REQUESTS = "100";
+    const { transcribe } = createRoutes({
+      maxConcurrentJobs: 1,
+      rateLimitMaxRequests: 100,
+    });
     let releaseWorkflow!: () => void;
-    const workflow = new Promise<{
+    const workflowResult = new Promise<{
       ok: true;
       segments: Array<{ text: string; start: number; duration: number }>;
     }>((resolve) => {
@@ -132,9 +124,7 @@ describe("transcription resource limits", () => {
           segments: [{ text: "ok", start: 0, duration: 1 }],
         });
     });
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockReturnValue(
-      workflow
-    );
+    workflowMock.mockReturnValue(workflowResult);
 
     const firstRequest = post(transcribe, { youtube_url: VIDEO_URL });
     await Promise.resolve();
@@ -151,8 +141,8 @@ describe("transcription resource limits", () => {
   });
 
   it("passes the configured duration limit into the workflow", async () => {
-    process.env.MAX_MEDIA_DURATION_SECONDS = "60";
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+    const { transcribe } = createRoutes({ mediaMaxDurationSeconds: 60 });
+    workflowMock.mockResolvedValue({
       ok: false,
       reason: "media-duration-exceeded",
     });
@@ -164,7 +154,7 @@ describe("transcription resource limits", () => {
       error: "Video exceeds the processing limit",
       errorId: "MEDIA_DURATION_EXCEEDED",
     });
-    expect(transcriptionWorkflow.runTranscriptionWorkflow).toHaveBeenCalledWith(
+    expect(workflowMock).toHaveBeenCalledWith(
       expect.objectContaining({
         limits: expect.objectContaining({ mediaMaxDurationSeconds: 60 }),
       })
@@ -172,7 +162,8 @@ describe("transcription resource limits", () => {
   });
 
   it("passes the configured byte limit without exposing internal details", async () => {
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+    const { transcribe } = createRoutes();
+    workflowMock.mockResolvedValue({
       ok: false,
       reason: "media-size-exceeded",
     });
@@ -186,7 +177,7 @@ describe("transcription resource limits", () => {
       errorId: "MEDIA_SIZE_EXCEEDED",
     });
     expect(JSON.stringify(payload)).not.toContain("50000001");
-    expect(transcriptionWorkflow.runTranscriptionWorkflow).toHaveBeenCalledWith(
+    expect(workflowMock).toHaveBeenCalledWith(
       expect.objectContaining({
         limits: expect.objectContaining({ mediaMaxBytes: 50_000_000 }),
       })
@@ -194,8 +185,8 @@ describe("transcription resource limits", () => {
   });
 
   it("allows media exactly at the duration boundary", async () => {
-    process.env.MAX_MEDIA_DURATION_SECONDS = "60";
-    vi.mocked(transcriptionWorkflow.runTranscriptionWorkflow).mockResolvedValue({
+    const { transcribe } = createRoutes({ mediaMaxDurationSeconds: 60 });
+    workflowMock.mockResolvedValue({
       ok: true,
       segments: [{ text: "at the limit", start: 0, duration: 60 }],
     });
@@ -210,7 +201,9 @@ describe("transcription resource limits", () => {
   });
 
   it("returns a stable timeout response for a stuck endpoint", async () => {
-    process.env.CAPTIONS_TIMEOUT_MS = "5";
+    const { captions } = createRoutes({
+      endpointTimeoutMs: { captions: 5 },
+    });
     vi.spyOn(captionsLib, "fetchCaptions").mockImplementation(
       () => new Promise(() => {})
     );

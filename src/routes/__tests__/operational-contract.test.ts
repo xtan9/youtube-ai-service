@@ -6,13 +6,22 @@ vi.mock("child_process", () => ({
 
 import { execFile } from "child_process";
 import { health } from "../health.js";
-import { metadata } from "../metadata.js";
-import * as metadataLib from "../../lib/ytdlp-metadata.js";
+import {
+  createMetadataRoute,
+  type MetadataRouteDependencies,
+} from "../metadata.js";
+import { createYtdlpMetadataFetcher } from "../../lib/ytdlp-metadata.js";
+import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 const CURRENT_KEY = "current-key";
 const PREVIOUS_KEY = "previous-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const REQUEST_ID = "req-148-example";
+const metadataConfig = createTestRuntimeConfig({ apiKeys: [CURRENT_KEY] });
+const metadataDependencies: MetadataRouteDependencies = {
+  fetchMetadata: createYtdlpMetadataFetcher(metadataConfig.mediaAcquisition),
+};
+const metadata = createMetadataRoute(metadataConfig, metadataDependencies);
 
 const mockedExecFile = vi.mocked(execFile);
 
@@ -34,8 +43,6 @@ function metadataRequest(
 describe("transcription HTTP operational contract", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    process.env.VPS_API_KEY = CURRENT_KEY;
-    delete process.env.VPS_API_KEY_PREVIOUS;
     mockedExecFile.mockImplementation(
       // @ts-expect-error execFile overloads do not narrow cleanly in mocks
       (_command, _args, _options, callback) => {
@@ -93,8 +100,11 @@ describe("transcription HTTP operational contract", () => {
   );
 
   it("accepts the previous key during the documented rotation overlap", async () => {
-    process.env.VPS_API_KEY_PREVIOUS = PREVIOUS_KEY;
-    vi.spyOn(metadataLib, "fetchYtdlpMetadata").mockResolvedValue({
+    const rotatingMetadata = createMetadataRoute(
+      createTestRuntimeConfig({ apiKeys: [CURRENT_KEY, PREVIOUS_KEY] }),
+      metadataDependencies
+    );
+    vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue({
       title: "Example",
       description: "A description",
       language: "en",
@@ -103,7 +113,7 @@ describe("transcription HTTP operational contract", () => {
       automatic_captions: {},
     });
 
-    const response = await metadata.request("/", {
+    const response = await rotatingMetadata.request("/", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -115,21 +125,6 @@ describe("transcription HTTP operational contract", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("X-Request-ID")).toBe(REQUEST_ID);
-  });
-
-  it("rejects a previous key without a configured current key", async () => {
-    delete process.env.VPS_API_KEY;
-    process.env.VPS_API_KEY_PREVIOUS = PREVIOUS_KEY;
-
-    const response = await metadataRequest({
-      Authorization: `Bearer ${PREVIOUS_KEY}`,
-    });
-
-    expect(response.status).toBe(500);
-    expect(await response.json()).toMatchObject({
-      error: "Service unavailable",
-      errorId: "SERVICE_MISCONFIGURED",
-    });
   });
 
   it("returns bounded generic errors with stable IDs and the request ID", async () => {
@@ -153,7 +148,7 @@ describe("transcription HTTP operational contract", () => {
   it("does not log full YouTube URLs or content when a provider fails", async () => {
     const errorMessage =
       `provider failed for ${VIDEO_URL}?token=secret Transcript: private text`;
-    vi.spyOn(metadataLib, "fetchYtdlpMetadata").mockRejectedValue(
+    vi.spyOn(metadataDependencies, "fetchMetadata").mockRejectedValue(
       new Error(errorMessage)
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

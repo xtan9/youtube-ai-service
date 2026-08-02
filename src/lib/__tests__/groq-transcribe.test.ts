@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFile } from "fs/promises";
 import * as audioCompress from "../audio-compress.js";
 import {
-  transcribeViaGroq,
+  createGroqTranscriber,
   GroqTranscribeError,
 } from "../groq-transcribe.js";
+import type { GroqConfig } from "../runtime-config.js";
 
 // Mock fs to avoid real disk reads; Groq receives whatever bytes we hand it.
 vi.mock("fs/promises", () => ({
@@ -38,6 +39,14 @@ const validGroqBody = {
   ],
 };
 
+const defaultConfig: GroqConfig = {
+  apiKey: "test-key",
+  model: "whisper-large-v3",
+  timeoutMs: 180_000,
+};
+
+let transcribeViaGroq = createGroqTranscriber(defaultConfig);
+
 function okResponse(body: unknown) {
   return new Response(JSON.stringify(body), {
     status: 200,
@@ -47,7 +56,7 @@ function okResponse(body: unknown) {
 
 describe("transcribeViaGroq", () => {
   beforeEach(() => {
-    vi.stubEnv("GROQ_API_KEY", "test-key");
+    transcribeViaGroq = createGroqTranscriber(defaultConfig);
     mockedReadFile.mockResolvedValue(Buffer.from("fake-audio-bytes"));
     mockedCompress.mockResolvedValue(COMPRESSED_PATH);
     mockedCleanup.mockResolvedValue(undefined);
@@ -60,7 +69,6 @@ describe("transcribeViaGroq", () => {
     // checks see only that test's calls.
     vi.restoreAllMocks();
     vi.clearAllMocks();
-    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
@@ -89,15 +97,18 @@ describe("transcribeViaGroq", () => {
     expect(formData.get("response_format")).toBe("verbose_json");
   });
 
-  it("uses GROQ_MODEL env var to override the default model", async () => {
+  it("uses the configured Groq model", async () => {
     // The README actively recommends `GROQ_MODEL=whisper-large-v3-turbo`
     // for ops who want speed back. A typo in the env-read path
-    // (`process.env.GROQ_MODEL || DEFAULT_MODEL`) would silently ignore
-    // that override and pin every prod request to large-v3 regardless
+    // Ignoring the configured model would silently pin every prod request
+    // to large-v3 regardless
     // — the kind of regression that's invisible until billing or
     // p95-latency dashboards surface it weeks later. Pin the override
     // here so a future refactor can't break it.
-    vi.stubEnv("GROQ_MODEL", "whisper-large-v3-turbo");
+    transcribeViaGroq = createGroqTranscriber({
+      ...defaultConfig,
+      model: "whisper-large-v3-turbo",
+    });
     const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
     vi.stubGlobal("fetch", fetchMock);
 

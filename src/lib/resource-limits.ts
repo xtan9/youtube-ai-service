@@ -3,105 +3,10 @@ import type { MiddlewareHandler } from "hono";
 import { jsonError } from "./http-errors.js";
 import { logServiceEvent } from "./observability.js";
 import type { ServiceEnv } from "./request-id.js";
+import type { AdmissionConfig } from "./runtime-config.js";
 
 export type ResourceLimitEndpoint = "metadata" | "captions" | "transcribe";
-
-export interface ResourceLimitConfig {
-  readonly requestBodyMaxBytes: number;
-  readonly mediaMaxBytes: number;
-  readonly mediaMaxDurationSeconds: number;
-  readonly rateLimitWindowMs: number;
-  readonly rateLimitMaxRequests: number;
-  readonly maxConcurrentJobs: number;
-  readonly endpointTimeoutMs: Readonly<Record<ResourceLimitEndpoint, number>>;
-}
-
-type ResourceLimitConfigResult =
-  | { readonly ok: true; readonly config: ResourceLimitConfig }
-  | { readonly ok: false; readonly invalidSetting: string };
-
-const ENV_NAMES = {
-  requestBodyMaxBytes: "MAX_REQUEST_BODY_BYTES",
-  mediaMaxBytes: "MAX_MEDIA_SIZE_BYTES",
-  mediaMaxDurationSeconds: "MAX_MEDIA_DURATION_SECONDS",
-  rateLimitWindowMs: "RATE_LIMIT_WINDOW_MS",
-  rateLimitMaxRequests: "RATE_LIMIT_MAX_REQUESTS",
-  maxConcurrentJobs: "MAX_CONCURRENT_JOBS",
-  metadataTimeoutMs: "METADATA_TIMEOUT_MS",
-  captionsTimeoutMs: "CAPTIONS_TIMEOUT_MS",
-  transcribeTimeoutMs: "TRANSCRIBE_TIMEOUT_MS",
-} as const;
-
-function readPositiveSetting(
-  env: NodeJS.ProcessEnv,
-  name: string
-): number | null {
-  const raw = env[name]?.trim();
-  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return null;
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function readPositiveIntegerSetting(
-  env: NodeJS.ProcessEnv,
-  name: string
-): number | null {
-  const value = readPositiveSetting(env, name);
-  return value !== null && Number.isInteger(value) ? value : null;
-}
-
-export function readResourceLimitConfig(
-  env: NodeJS.ProcessEnv = process.env
-): ResourceLimitConfigResult {
-  const settings = {
-    requestBodyMaxBytes: readPositiveIntegerSetting(
-      env,
-      ENV_NAMES.requestBodyMaxBytes
-    ),
-    mediaMaxBytes: readPositiveIntegerSetting(env, ENV_NAMES.mediaMaxBytes),
-    mediaMaxDurationSeconds: readPositiveSetting(
-      env,
-      ENV_NAMES.mediaMaxDurationSeconds
-    ),
-    rateLimitWindowMs: readPositiveSetting(env, ENV_NAMES.rateLimitWindowMs),
-    rateLimitMaxRequests: readPositiveIntegerSetting(
-      env,
-      ENV_NAMES.rateLimitMaxRequests
-    ),
-    maxConcurrentJobs: readPositiveIntegerSetting(
-      env,
-      ENV_NAMES.maxConcurrentJobs
-    ),
-    metadataTimeoutMs: readPositiveSetting(env, ENV_NAMES.metadataTimeoutMs),
-    captionsTimeoutMs: readPositiveSetting(env, ENV_NAMES.captionsTimeoutMs),
-    transcribeTimeoutMs: readPositiveSetting(
-      env,
-      ENV_NAMES.transcribeTimeoutMs
-    ),
-  };
-
-  const invalidSetting = Object.entries(settings).find(([, value]) => value === null)?.[0];
-  if (invalidSetting) {
-    return { ok: false, invalidSetting };
-  }
-
-  return {
-    ok: true,
-    config: {
-      requestBodyMaxBytes: settings.requestBodyMaxBytes!,
-      mediaMaxBytes: settings.mediaMaxBytes!,
-      mediaMaxDurationSeconds: settings.mediaMaxDurationSeconds!,
-      rateLimitWindowMs: settings.rateLimitWindowMs!,
-      rateLimitMaxRequests: settings.rateLimitMaxRequests!,
-      maxConcurrentJobs: settings.maxConcurrentJobs!,
-      endpointTimeoutMs: {
-        metadata: settings.metadataTimeoutMs!,
-        captions: settings.captionsTimeoutMs!,
-        transcribe: settings.transcribeTimeoutMs!,
-      },
-    },
-  };
-}
+export type ResourceLimitConfig = AdmissionConfig;
 
 export type BoundedJsonResult =
   | { readonly ok: true; readonly value: unknown }
@@ -205,25 +110,9 @@ export function resetResourceLimitState(): void {
 }
 
 export const resourceLimitMiddleware = (
-  endpoint: ResourceLimitEndpoint
+  endpoint: ResourceLimitEndpoint,
+  config: AdmissionConfig
 ): MiddlewareHandler<ServiceEnv> => async (c, next) => {
-  const configResult = readResourceLimitConfig();
-  if (!configResult.ok) {
-    logServiceEvent("error", "resource_limits.misconfigured", {
-      errorId: "SERVICE_LIMITS_MISCONFIGURED",
-      requestId: c.get("requestId"),
-      stage: endpoint,
-      reason: configResult.invalidSetting,
-    });
-    return jsonError(
-      c,
-      503,
-      "Service temporarily unavailable",
-      "SERVICE_LIMITS_MISCONFIGURED"
-    );
-  }
-
-  const config = configResult.config;
   c.set("resourceLimits", config);
 
   const keyFingerprint = c.get("apiKeyFingerprint");
