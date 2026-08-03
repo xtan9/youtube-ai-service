@@ -8,7 +8,10 @@ import {
   createProductionTranscriptionWorkflow,
   type TranscriptionWorkflow,
 } from "./lib/transcription-workflow.js";
-import { createYtdlpMetadataFetcher } from "./lib/ytdlp-metadata.js";
+import {
+  createProductionVideoInformationWorkflow,
+  type VideoInformationWorkflow,
+} from "./lib/video-information-workflow.js";
 import {
   createCaptionsRoute,
   type CaptionsRouteDependencies,
@@ -16,20 +19,19 @@ import {
 import { health } from "./routes/health.js";
 import {
   createMetadataRoute,
-  type MetadataRouteDependencies,
 } from "./routes/metadata.js";
 import { createTranscribeRoute } from "./routes/transcribe.js";
 
 export interface AppAdapters {
   fetchCaptions: CaptionsRouteDependencies["fetchCaptions"];
-  fetchMetadata: MetadataRouteDependencies["fetchMetadata"];
+  videoInformationWorkflow: VideoInformationWorkflow;
   transcriptionWorkflow: TranscriptionWorkflow;
 }
 
 function createProductionAppAdapters(config: RuntimeConfig): AppAdapters {
   return {
     fetchCaptions,
-    fetchMetadata: createYtdlpMetadataFetcher(config.mediaAcquisition),
+    videoInformationWorkflow: createProductionVideoInformationWorkflow(config),
     transcriptionWorkflow: createProductionTranscriptionWorkflow(config),
   };
 }
@@ -56,7 +58,7 @@ export function createApp(
   app.route(
     "/metadata",
     createMetadataRoute(config, admission, {
-      fetchMetadata: adapters.fetchMetadata,
+      videoInformationWorkflow: adapters.videoInformationWorkflow,
     }),
   );
 
