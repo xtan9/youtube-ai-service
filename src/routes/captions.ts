@@ -1,16 +1,17 @@
 import type { Hono } from "hono";
 import { z } from "zod";
-import type { CaptionResult } from "../lib/captions.js";
+import type { CaptionTrackAcquisition } from "../lib/captions.js";
 import {
   parseLanguageTag,
   type LanguageTag,
 } from "../lib/language-tag.js";
 import {
-  type YouTubeVideoReference,
   youtubeVideoReferenceSchema,
 } from "../lib/youtube-url.js";
-import { respondWithOperationalOutcome } from "../lib/http-errors.js";
-import { logServiceEvent } from "../lib/observability.js";
+import {
+  respondWithOperationalOutcome,
+  respondWithOperationalOutcomeWithoutLog,
+} from "../lib/http-errors.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import {
@@ -22,12 +23,7 @@ import {
 type CaptionsRouteConfig = DataRouteConfig;
 
 export interface CaptionsRouteDependencies {
-  fetchCaptions(
-    videoReference: YouTubeVideoReference,
-    lang: LanguageTag | undefined,
-    requestId: string,
-    signal: AbortSignal,
-  ): Promise<CaptionResult | null>;
+  captionTrackAcquisition: CaptionTrackAcquisition;
 }
 
 export function createCaptionsRoute(
@@ -59,22 +55,14 @@ export function createCaptionsRoute(
       languageTag = parsedLanguageTag.languageTag;
     }
 
-    // Log only the Video ID, never the full URL. Tracker/analytics query
-    // strings the frontend might append must not reach the log aggregator.
-    const videoId = videoReference.videoId;
-
     try {
-      logServiceEvent("info", "captions.fetch", {
-        requestId: c.get("requestId"),
-        videoId,
-        lang: languageTag?.tag,
-      });
-      const result = await dependencies.fetchCaptions(
+      const request = Object.freeze({
         videoReference,
-        languageTag,
-        c.get("requestId"),
-        c.get("workSignal"),
-      );
+        requestedLanguage: languageTag,
+        requestId: c.get("requestId"),
+        signal: c.get("workSignal"),
+      });
+      const outcome = await dependencies.captionTrackAcquisition(request);
 
       // Status contract this route owes its consumers:
       //   200 — captions extracted, fallback path not needed
@@ -82,34 +70,41 @@ export function createCaptionsRoute(
       //   404 — no captions available (fallback to /transcribe, no alert)
       //   500 — unexpected library/network failure (alert, do not fall back
       //         silently since that masks real problems behind compute bills)
-      if (!result) {
-        return respondWithOperationalOutcome(c, "captions-not-found");
+      switch (outcome.kind) {
+        case "acquired":
+          // Wire response carries `segments` (the canonical shape consumed
+          // by the new frontend) and the transitional derived `transcript`
+          // field. Internal outcome discriminants and Prompt Locale naming
+          // do not cross the HTTP boundary.
+          return c.json({
+            segments: outcome.segments,
+            transcript: outcome.segments
+              .map((segment) => segment.text)
+              .join(" ")
+              .replace(/\s+/g, " ")
+              .trim(),
+            source: outcome.source,
+            language: outcome.promptLocale,
+            title: outcome.title,
+            channelName: outcome.channelName,
+          });
+        case "absent":
+          return respondWithOperationalOutcome(c, "captions-not-found");
+        case "video-unavailable":
+          // Temporary compatibility mapping: the terminal Video Unavailable
+          // wire contract is activated by the coordinated consumer rollout.
+          return respondWithOperationalOutcome(c, "captions-not-found");
+        default: {
+          const _exhaustive: never = outcome;
+          void _exhaustive;
+          throw new Error(
+            "Caption Track acquisition returned an unknown outcome",
+          );
+        }
       }
-
-      // Wire response carries `segments` (the canonical shape consumed by
-      // the new frontend) AND a derived `transcript` string (kept for one
-      // rollout window so a frontend that hasn't deployed yet keeps
-      // working). The follow-up cleanup PR drops `transcript` once the
-      // frontend is fully migrated.
-      //
-      // The derived string preserves the pre-PR whitespace normalization
-      // (`join(" ").replace(/\s+/g, " ").trim()`). An old frontend that
-      // hashed/length-gated the transcript would otherwise see a
-      // different value for the same video during the rollout window.
-      return c.json({
-        ...result,
-        transcript: result.segments
-          .map((s) => s.text)
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim(),
-      });
-    } catch (err) {
+    } catch {
       c.get("workSignal").throwIfAborted();
-      return respondWithOperationalOutcome(c, "captions-failed", {
-        videoId,
-        errorName: err instanceof Error ? err.name : "unknown",
-      });
+      return respondWithOperationalOutcomeWithoutLog(c, "captions-failed");
     }
   });
 

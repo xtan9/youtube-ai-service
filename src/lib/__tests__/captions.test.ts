@@ -1,733 +1,375 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  decodeCaptionEntities,
-  fetchCaptions,
-  isExpectedNoCaptions,
-  pickLocale,
+  createCaptionTrackAcquisition,
+  type CaptionTrackAcquisitionRequest,
+  type CaptionTrackProvider,
+  type CaptionTrackProviderResult,
 } from "../captions.js";
-import {
-  fetchTranscript,
-  YoutubeTranscriptDisabledError,
-  YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptNotAvailableLanguageError,
-  type TranscriptSegment,
-} from "youtube-transcript-plus";
-import {
-  parseLanguageTag,
-  type LanguageTag,
-} from "../language-tag.js";
+import { parseLanguageTag } from "../language-tag.js";
 import { parseYouTubeVideoReference } from "../youtube-url.js";
 
-// ESM module spying requires vi.mock at module scope — vi.spyOn on an
-// imported namespace fails with "Module namespace is not configurable".
-vi.mock("youtube-transcript-plus", async () => {
-  const actual =
-    await vi.importActual<typeof import("youtube-transcript-plus")>(
-      "youtube-transcript-plus"
-    );
-  return { ...actual, fetchTranscript: vi.fn() };
-});
+const VIDEO_REFERENCE = (() => {
+  const reference = parseYouTubeVideoReference(
+    "https://youtu.be/dQw4w9WgXcQ",
+  );
+  if (!reference) throw new Error("test fixture must be a YouTube URL");
+  return reference;
+})();
 
-const mockedFetchTranscript = vi.mocked(fetchTranscript);
-
-const VIDEO_REFERENCE = parseYouTubeVideoReference(
-  "https://youtu.be/dQw4w9WgXcQ",
-);
-if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
-
-const languageTag = (input: string): LanguageTag => {
+const languageTag = (input: string) => {
   const result = parseLanguageTag(input);
   if (!result.ok) throw new Error(`Expected a Language Tag: ${input}`);
   return result.languageTag;
 };
 
+type ProviderSuccess = Extract<
+  CaptionTrackProviderResult,
+  { readonly kind: "success" }
+>;
 
-describe("isExpectedNoCaptions", () => {
-  it("classifies library-defined no-captions errors as expected", () => {
-    expect(
-      isExpectedNoCaptions(new YoutubeTranscriptDisabledError("x"))
-    ).toBe(true);
-    expect(
-      isExpectedNoCaptions(new YoutubeTranscriptNotAvailableError("x"))
-    ).toBe(true);
-  });
-
-  it("treats arbitrary errors as unexpected (alertable)", () => {
-    // The distinction matters: expected errors → 404 → Whisper fallback,
-    // unexpected errors → 500 → alert. A misclassification here
-    // silently bills GPU for every library regression.
-    expect(isExpectedNoCaptions(new Error("network timeout"))).toBe(false);
-    expect(isExpectedNoCaptions(new TypeError("x"))).toBe(false);
-    expect(isExpectedNoCaptions("string-error")).toBe(false);
-    expect(isExpectedNoCaptions(null)).toBe(false);
-  });
+const success = (
+  overrides: Partial<ProviderSuccess> = {},
+): ProviderSuccess => ({
+  kind: "success",
+  segments: [{ text: "hello", start: 0, duration: 1 }],
+  languageTag: "en",
+  title: "Example",
+  channelName: "Channel",
+  ...overrides,
 });
 
-describe("pickLocale", () => {
-  const seg = (lang: string | undefined): TranscriptSegment =>
-    ({ text: "hi", lang } as unknown as TranscriptSegment);
-
-  it.each([
-    ["zh", "zh"],
-    ["zh-CN", "zh"],
-    ["zh-TW", "zh"],
-    ["zh-Hans", "zh"],
-    ["ZH-cn", "zh"], // case-insensitive
-    ["en", "en"],
-    ["en-US", "en"],
-    ["en-gb", "en"],
-  ])("maps lang=%s → %s", (lang, expected) => {
-    expect(pickLocale([seg(lang)])).toBe(expected);
+function makeRequest(
+  language: string | undefined = undefined,
+  signal = new AbortController().signal,
+): CaptionTrackAcquisitionRequest {
+  return Object.freeze({
+    videoReference: VIDEO_REFERENCE,
+    requestedLanguage:
+      language === undefined ? undefined : languageTag(language),
+    requestId: "request-123",
+    signal,
   });
+}
 
-  it.each([
-    ["fr", "en"], // unknown language — fall back to en prompt template
-    ["ja", "en"],
-    ["", "en"],
-  ])("falls back to en for unsupported lang=%s", (lang, expected) => {
-    expect(pickLocale([seg(lang)])).toBe(expected);
-  });
+describe("Caption Track acquisition", () => {
+  const provider = vi.fn<CaptionTrackProvider>();
 
-  it("falls back to en when segments[0] has no lang at all", () => {
-    expect(pickLocale([seg(undefined)])).toBe("en");
-  });
-
-  it("falls back to en when segments array is empty", () => {
-    expect(pickLocale([])).toBe("en");
-  });
-
-  it.each([undefined, "und", "abc", "not a language tag"])(
-    "warns and falls back to en when the returned track tag is unusable: %p",
-    (lang) => {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      expect(pickLocale([seg(lang)], "video-id", "request-id")).toBe("en");
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[captions.unknown_locale]",
-        expect.objectContaining({
-          videoId: "video-id",
-          requestId: "request-id",
-        }),
-      );
-
-      warnSpy.mockRestore();
-    },
-  );
-});
-
-describe("decodeCaptionEntities", () => {
-  it("decodes the named XML entities the library already handles once", () => {
-    expect(decodeCaptionEntities("Tom &amp; Jerry")).toBe("Tom & Jerry");
-    expect(decodeCaptionEntities("&lt;tag&gt;")).toBe("<tag>");
-    expect(decodeCaptionEntities("&quot;hi&quot;")).toBe('"hi"');
-    expect(decodeCaptionEntities("don&apos;t")).toBe("don't");
-  });
-
-  it("decodes the apostrophe variants the library covers and the ones it doesn't", () => {
-    expect(decodeCaptionEntities("I&#39;m here")).toBe("I'm here");
-    // The library's named-decode regex skips hex (&#x27;) — covered here.
-    expect(decodeCaptionEntities("can&#x27;t")).toBe("can't");
-    // Generic decimal numeric entities (e.g. em-dash &#8212;) — also not
-    // in the library's list.
-    expect(decodeCaptionEntities("hi &#8212; there")).toBe("hi — there");
-  });
-
-  it("unwraps double-encoded entities (the bug the user reported)", () => {
-    // YouTube sometimes emits `&amp;#39;`. After the library's single
-    // decode pass, `&amp;` -> `&`, leaving `&#39;`. The second pass here
-    // takes that to `'`. Without it, `I&#39;m` reaches the UI verbatim
-    // and React renders it as literal "I&#39;m".
-    expect(decodeCaptionEntities("I&amp;#39;m here")).toBe("I'm here");
-    expect(decodeCaptionEntities("&amp;amp;")).toBe("&");
-  });
-
-  it("is a no-op for plain text and Unicode that contains an ampersand", () => {
-    expect(decodeCaptionEntities("plain text")).toBe("plain text");
-    // Bare ampersand without entity shape stays intact (e.g. brand names
-    // like "AT&T" mid-transcript).
-    expect(decodeCaptionEntities("AT&T")).toBe("AT&T");
-    // Non-ASCII passes through.
-    expect(decodeCaptionEntities("café — naïve")).toBe("café — naïve");
-  });
-
-  it("handles supplementary-plane codepoints (emoji, > 0xFFFF)", () => {
-    // U+1F600 GRINNING FACE = 128512
-    expect(decodeCaptionEntities("hi &#128512;!")).toBe("hi 😀!");
-    expect(decodeCaptionEntities("&#x1F600;")).toBe("😀");
-  });
-
-  it("does not throw on out-of-range numeric entities (returns original)", () => {
-    // > 0x10FFFF: String.fromCodePoint would throw RangeError. The
-    // decoder must return the raw entity unchanged so a single
-    // malformed entity can't 500 an entire captions fetch.
-    expect(() => decodeCaptionEntities("bad &#999999999999;")).not.toThrow();
-    expect(decodeCaptionEntities("bad &#999999999999;")).toBe(
-      "bad &#999999999999;"
-    );
-    expect(decodeCaptionEntities("bad &#xFFFFFFFF;")).toBe("bad &#xFFFFFFFF;");
-  });
-
-  it("preserves malformed entity-like substrings unchanged", () => {
-    // Missing semicolon, missing digits, named-but-unknown — all should
-    // pass through as-is rather than partial-match into garbage.
-    expect(decodeCaptionEntities("a &amp b")).toBe("a &amp b"); // no `;`
-    expect(decodeCaptionEntities("a &; b")).toBe("a &; b");
-    expect(decodeCaptionEntities("a &#; b")).toBe("a &#; b");
-    expect(decodeCaptionEntities("a &foo; b")).toBe("a &foo; b");
-  });
-
-  it("handles mixed entities in one string", () => {
-    expect(
-      decodeCaptionEntities("Tom &amp; &#39;Jerry&#39; &#x2014; fin")
-    ).toBe("Tom & 'Jerry' — fin");
-  });
-});
-
-describe("fetchCaptions", () => {
   beforeEach(() => {
-    // vitest 4 changed `vi.restoreAllMocks()` to no longer clear mock call
-    // history (only restores `vi.spyOn` originals). Call `vi.clearAllMocks()`
-    // explicitly so `mock.calls[0]` refers to THIS test's call, not a
-    // previous test's leftover.
     vi.restoreAllMocks();
-    vi.clearAllMocks();
+    provider.mockReset();
   });
 
-  // The library types fetchTranscript as returning TranscriptSegment[],
-  // but with `videoDetails: true` it actually returns a richer object that
-  // production code casts. Match that runtime shape but cast to the
-  // declared type so the mock satisfies TS.
-  //
-  // Each fixture segment ships with `offset` and `duration` because those
-  // flow into the response now — text-only fixtures would land in the
-  // assertion as start/duration=undefined and silently pass a NaN check.
-  const ok = (segments: Partial<TranscriptSegment>[]) =>
-    ({
-      segments: segments.map((s, i) => ({
-        offset: i,
-        duration: 1,
-        ...s,
-      })),
-      videoDetails: { title: "t", author: "a" },
-    } as unknown as TranscriptSegment[]);
-
-  it("uses the canonical Video ID from the validated reference", async () => {
-    // Short-circuits before hitting the library — protects against
-    // spamming YouTube with bare-ID or invalid-URL requests.
-    mockedFetchTranscript.mockResolvedValue(ok([{ text: "hello", lang: "en" }]));
-    await fetchCaptions(VIDEO_REFERENCE);
-    expect(mockedFetchTranscript).toHaveBeenCalledWith(
-      VIDEO_REFERENCE.videoId,
-      { videoDetails: true },
+  it("acquires timed text, metadata, source, and Prompt Locale through one request", async () => {
+    provider.mockResolvedValue(
+      success({
+        segments: [
+          { text: "Hello &amp; world", start: 1, duration: 2 },
+          { text: "next", start: 3, duration: 1.5 },
+        ],
+        languageTag: "zh-Hans",
+        title: null,
+        channelName: null,
+      }),
     );
+    const request = makeRequest("zh");
+
+    await expect(createCaptionTrackAcquisition(provider)(request)).resolves.toEqual(
+      {
+        kind: "acquired",
+        segments: [
+          { text: "Hello & world", start: 1, duration: 2 },
+          { text: "next", start: 3, duration: 1.5 },
+        ],
+        source: "auto_captions",
+        promptLocale: "zh",
+        title: null,
+        channelName: null,
+      },
+    );
+    expect(provider).toHaveBeenCalledWith({
+      videoId: VIDEO_REFERENCE.videoId,
+      language: "zh",
+      signal: request.signal,
+    });
+    expect(Object.isFrozen(request)).toBe(true);
   });
 
-  it("returns null on expected no-captions errors (quiet, logs nothing)", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    mockedFetchTranscript.mockRejectedValue(
-      new YoutubeTranscriptDisabledError("x")
-    );
-    const result = await fetchCaptions(VIDEO_REFERENCE);
-    expect(result).toBeNull();
-    expect(errorSpy).not.toHaveBeenCalled();
+  it("omits the provider language filter when no language was requested", async () => {
+    provider.mockResolvedValue(success());
+    const request = makeRequest();
+
+    await createCaptionTrackAcquisition(provider)(request);
+
+    expect(provider).toHaveBeenCalledWith({
+      videoId: VIDEO_REFERENCE.videoId,
+      signal: request.signal,
+    });
+    expect(provider.mock.calls[0]?.[0]).not.toHaveProperty("language");
   });
 
-  it("throws (not returns null) on unexpected library errors", async () => {
-    // The whole point of this PR: unexpected errors must NOT return null,
-    // because the route reads null as "404 no captions → fall back to
-    // Whisper", which would silently bill GPU on every library/network
-    // regression. Throw so the route can return 500 and fire an alert.
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    mockedFetchTranscript.mockRejectedValue(
-      new TypeError("schema drift")
-    );
+  it.each([
+    ["disabled", { kind: "absent", reason: "disabled" }],
+    ["missing", { kind: "absent", reason: "missing" }],
+    [
+      "language mismatch",
+      {
+        kind: "absent",
+        reason: "language-mismatch",
+        availableLanguages: ["en", "fr"],
+      },
+    ],
+  ] as const)("classifies provider %s as Caption Track Absent", async (_name, result) => {
+    provider.mockResolvedValue(result);
+
     await expect(
-      fetchCaptions(VIDEO_REFERENCE)
-    ).rejects.toThrow("schema drift");
+      createCaptionTrackAcquisition(provider)(makeRequest("zh")),
+    ).resolves.toMatchObject({ kind: "absent", reason: result.reason });
   });
 
-  it("logs unexpected errors with the stable CAPTION_UNEXPECTED_FAILURE id before throwing", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    mockedFetchTranscript.mockRejectedValue(
-      new TypeError("schema drift")
-    );
+  it("classifies an empty provider result as absent", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    provider.mockResolvedValue(success({ segments: [] }));
+
     await expect(
-      fetchCaptions(VIDEO_REFERENCE)
-    ).rejects.toThrow();
+      createCaptionTrackAcquisition(provider)(makeRequest()),
+    ).resolves.toEqual({ kind: "absent", reason: "empty-provider-result" });
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[captions.empty_provider_result]",
+      expect.objectContaining({
+        errorId: "CAPTION_EMPTY_PROVIDER_RESULT",
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        segmentCount: 0,
+      }),
+    );
+  });
+
+  it("classifies a track filtered to empty after entity decoding and whitespace checks", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    provider.mockResolvedValue(
+      success({
+        segments: [
+          { text: "   ", start: 0, duration: 1 },
+          { text: "&amp;#160;", start: 1, duration: 1 },
+        ],
+      }),
+    );
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest()),
+    ).resolves.toEqual({ kind: "absent", reason: "filtered-empty" });
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[captions.filtered_empty]",
+      expect.objectContaining({
+        errorId: "CAPTION_SEGMENTS_FILTERED_EMPTY",
+        segmentCount: 2,
+      }),
+    );
+  });
+
+  it.each([
+    "provider-video-unavailable",
+    "invalid-video-reference",
+  ] as const)("keeps %s distinct from Caption Track Absent", async (reason) => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    provider.mockResolvedValue({ kind: "unavailable", reason });
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest()),
+    ).resolves.toEqual({ kind: "video-unavailable", reason });
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[captions.video_unavailable]",
+      expect.objectContaining({
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        outcome: "video-unavailable",
+        classification: reason,
+      }),
+    );
+  });
+
+  it("retries a bare primary language with the first matching provider track", async () => {
+    provider
+      .mockResolvedValueOnce({
+        kind: "absent",
+        reason: "language-mismatch",
+        availableLanguages: ["und", "zh-Hant-TW", "zh-Hans"],
+      })
+      .mockResolvedValueOnce(
+        success({ languageTag: "zh-Hant-TW" }),
+      );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const request = makeRequest("zh");
+
+    await expect(createCaptionTrackAcquisition(provider)(request)).resolves.toMatchObject(
+      { kind: "acquired", promptLocale: "zh" },
+    );
+    expect(provider).toHaveBeenNthCalledWith(1, {
+      videoId: VIDEO_REFERENCE.videoId,
+      language: "zh",
+      signal: request.signal,
+    });
+    expect(provider).toHaveBeenNthCalledWith(2, {
+      videoId: VIDEO_REFERENCE.videoId,
+      language: "zh-Hant-TW",
+      signal: request.signal,
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG]",
+      expect.objectContaining({
+        errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        requested: "zh",
+        matched: "zh-Hant-TW",
+        availableCount: 3,
+      }),
+    );
+  });
+
+  it("matches a canonical exact identity while retrying with the provider raw token", async () => {
+    provider
+      .mockResolvedValueOnce({
+        kind: "absent",
+        reason: "language-mismatch",
+        availableLanguages: ["und", "abc", "fra-CA", "fr-FR"],
+      })
+      .mockResolvedValueOnce(success({ languageTag: "fra-CA" }));
+    const request = makeRequest("fr-CA");
+
+    await createCaptionTrackAcquisition(provider)(request);
+
+    expect(provider.mock.calls[1]?.[0]).toMatchObject({
+      language: "fra-CA",
+    });
+  });
+
+  it("does not downgrade a specific language tag or retry without a matching track", async () => {
+    provider.mockResolvedValue({
+      kind: "absent",
+      reason: "language-mismatch",
+      availableLanguages: ["fr-FR", "fr"],
+    });
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest("fr-CA")),
+    ).resolves.toEqual({ kind: "absent", reason: "language-mismatch" });
+    expect(provider).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry a second language mismatch", async () => {
+    provider
+      .mockResolvedValueOnce({
+        kind: "absent",
+        reason: "language-mismatch",
+        availableLanguages: ["zh-Hans"],
+      })
+      .mockResolvedValueOnce({
+        kind: "absent",
+        reason: "language-mismatch",
+        availableLanguages: ["zh-Hant"],
+      });
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest("zh")),
+    ).resolves.toEqual({ kind: "absent", reason: "language-mismatch" });
+    expect(provider).toHaveBeenCalledTimes(2);
+  });
+
+  it("propagates unexpected provider defects and logs only safe classifications", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const defect = new TypeError(
+      "provider body https://provider.example/private?token=secret",
+    );
+    provider.mockRejectedValue(defect);
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest()),
+    ).rejects.toBe(defect);
     expect(errorSpy).toHaveBeenCalledWith(
       "[captions.CAPTION_UNEXPECTED_FAILURE]",
       expect.objectContaining({
         errorId: "CAPTION_UNEXPECTED_FAILURE",
+        requestId: "request-123",
         videoId: "dQw4w9WgXcQ",
-      })
+        errorClass: "TypeError",
+      }),
     );
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("provider body");
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("provider.example");
   });
 
-  it("returns null AND logs CAPTION_EMPTY_SEGMENTS when the library reports zero segments", async () => {
-    // The log is the tripwire for YouTube schema drift: if a rate of
-    // these spikes, we start paying for Whisper on videos that still
-    // have captions. Pin the errorId so a future refactor can't drop it.
+  it("propagates an abort reason before provider classification", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("deadline", "TimeoutError");
+    provider.mockImplementation(async () => {
+      controller.abort(reason);
+      return { kind: "absent", reason: "missing" };
+    });
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(
+        makeRequest(undefined, controller.signal),
+      ),
+    ).rejects.toBe(reason);
+  });
+
+  it("propagates an abort reason observed after the retry begins", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("request cancelled", "AbortError");
+    provider
+      .mockResolvedValueOnce({
+        kind: "absent",
+        reason: "language-mismatch",
+        availableLanguages: ["zh-Hans"],
+      })
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw new Error("provider failure after abort");
+      });
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(
+        makeRequest("zh", controller.signal),
+      ),
+    ).rejects.toBe(reason);
+  });
+
+  it("chooses English Prompt Locale and diagnoses unsupported returned language", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    mockedFetchTranscript.mockResolvedValue(ok([]));
-    expect(await fetchCaptions(VIDEO_REFERENCE)).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[captions.empty_segments]",
-      expect.objectContaining({
-        errorId: "CAPTION_EMPTY_SEGMENTS",
-        videoId: "dQw4w9WgXcQ",
-      })
+    provider.mockResolvedValue(
+      success({
+        languageTag: "fr",
+        segments: [
+          {
+            text: "A&amp;B &amp;#39; &#xD800; &#999999999999;",
+            start: 0,
+            duration: 1,
+          },
+        ],
+      }),
     );
-  });
 
-  it("returns null AND logs CAPTION_EMPTY_TRANSCRIPT when segments join to whitespace", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    mockedFetchTranscript.mockResolvedValue(
-      ok([{ text: "   ", lang: "en" }, { text: "\n", lang: "en" }])
-    );
-    expect(await fetchCaptions(VIDEO_REFERENCE)).toBeNull();
-    expect(warnSpy).toHaveBeenCalledWith(
-      "[captions.empty_transcript]",
-      expect.objectContaining({
-        errorId: "CAPTION_EMPTY_TRANSCRIPT",
-        videoId: "dQw4w9WgXcQ",
-      })
-    );
-  });
-
-  it("preserves segment text verbatim and pairs each with its timing data", async () => {
-    // Segments are now the source of truth. The frontend renders them
-    // chunked into paragraphs at display time, so the lib must hand them
-    // through unmodified — a refactor that re-introduced whitespace
-    // collapse here would silently corrupt the text the LLM sees.
-    mockedFetchTranscript.mockResolvedValue(
-      ok([
-        { text: "  hello\tworld  ", lang: "en", offset: 0, duration: 2 },
-        { text: "foo", lang: "en", offset: 2, duration: 1.5 },
-      ])
-    );
-    const result = await fetchCaptions(VIDEO_REFERENCE);
-    expect(result?.segments).toEqual([
-      { text: "  hello\tworld  ", start: 0, duration: 2 },
-      { text: "foo", start: 2, duration: 1.5 },
-    ]);
-  });
-
-  it("returns null metadata fields when videoDetails is undefined (not empty string)", async () => {
-    // Forces consumers to handle the "no metadata" case explicitly
-    // rather than seeing a plausibly-valid empty string.
-    mockedFetchTranscript.mockResolvedValue({
-      segments: [{ text: "hello", lang: "en" }],
-      videoDetails: undefined,
-    } as unknown as TranscriptSegment[]);
-    const result = await fetchCaptions(VIDEO_REFERENCE);
-    expect(result?.title).toBeNull();
-    expect(result?.channelName).toBeNull();
-  });
-
-  it("maps the full happy path to a CaptionResult", async () => {
-    mockedFetchTranscript.mockResolvedValue(
-      ok([
-        { text: "hello", lang: "zh-CN", offset: 0, duration: 1 },
-        { text: "world", lang: "zh-CN", offset: 1, duration: 2 },
-      ])
-    );
-    const result = await fetchCaptions(VIDEO_REFERENCE);
-    expect(result).toEqual({
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest("en")),
+    ).resolves.toMatchObject({
+      kind: "acquired",
+      promptLocale: "en",
       segments: [
-        { text: "hello", start: 0, duration: 1 },
-        { text: "world", start: 1, duration: 2 },
+        {
+          text: "A&B ' &#xD800; &#999999999999;",
+          start: 0,
+          duration: 1,
+        },
       ],
-      source: "auto_captions",
-      language: "zh",
-      title: "t",
-      channelName: "a",
     });
-  });
-
-  it("omits `lang` in the library call when the caller didn't provide one (back-compat)", async () => {
-    // Without this guard a future refactor could pass `{ lang: undefined }`,
-    // which the library treats as a real filter and rejects with
-    // NotAvailableLanguage — breaking the current "first track wins" flow
-    // that existing callers depend on.
-    mockedFetchTranscript.mockResolvedValue(ok([{ text: "hi", lang: "en" }]));
-    await fetchCaptions(VIDEO_REFERENCE);
-    const call = mockedFetchTranscript.mock.calls[0];
-    expect(call[1]).toEqual({ videoDetails: true });
-    expect(call[1]).not.toHaveProperty("lang");
-  });
-
-  it("calls pickLocale with the RAW library segments, not the mapped {start,duration,text} ones", async () => {
-    // Subtle invariant: `pickLocale` reads `segments[0].lang` to pick the
-    // prompt template. Our mapped `TranscriptSegment` shape doesn't carry
-    // a `lang` field — only the raw library segments do. A "tidy this up"
-    // refactor that swapped `pickLocale(ytSegments, ...)` to
-    // `pickLocale(segments, ...)` would silently route every Chinese
-    // video to the English prompt. Pin the contract via a happy-path
-    // assertion that depends on lang resolution working through.
-    mockedFetchTranscript.mockResolvedValue(
-      ok([{ text: "你好", lang: "zh-CN", offset: 0, duration: 1 }])
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[captions.unknown_locale]",
+      expect.objectContaining({
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        lang: "fr",
+      }),
     );
-    const result = await fetchCaptions(VIDEO_REFERENCE);
-    // language === "zh" can ONLY come from the raw `lang: "zh-CN"` field —
-    // mapped segments lack `lang` so pickLocale would default to "en".
-    expect(result?.language).toBe("zh");
-    // And the mapped segment carries no `lang` field — proves the two
-    // arrays are distinct.
-    expect(result?.segments[0]).not.toHaveProperty("lang");
-  });
-
-  it("forwards `lang` to the library when provided (pins caption track)", async () => {
-    // The whole point of this parameter: without it, the library picks
-    // `tracks[0]` which for some videos is the wrong language entirely.
-    mockedFetchTranscript.mockResolvedValue(ok([{ text: "bonjour", lang: "fr" }]));
-    await fetchCaptions(VIDEO_REFERENCE,
-      languageTag("fr"),
-    );
-    const call = mockedFetchTranscript.mock.calls[0];
-    expect(call[1]).toEqual({ videoDetails: true, lang: "fr" });
-  });
-
-  it("derives Prompt Locale from the returned track instead of the requested tag", async () => {
-    mockedFetchTranscript.mockResolvedValue(
-      ok([{ text: "你好", lang: "zh-Hant-TW" }]),
-    );
-
-    const result = await fetchCaptions(VIDEO_REFERENCE,
-      languageTag("en"),
-    );
-
-    expect(result?.language).toBe("zh");
-  });
-
-  it.each([undefined, "und", "abc"])(
-    "warns and falls back to English when the returned track tag is unusable: %p",
-    async (returnedLang) => {
-      mockedFetchTranscript.mockResolvedValue(
-        ok([{ text: "hello", lang: returnedLang }]),
-      );
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("zh-Hant-TW"),
-        "request-id",
-      );
-
-      expect(result?.language).toBe("en");
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[captions.unknown_locale]",
-        expect.objectContaining({
-          requestId: "request-id",
-          videoId: "dQw4w9WgXcQ",
-        }),
-      );
-    },
-  );
-
-  describe("fetchCaptions: primary-subtag retry", () => {
-    beforeEach(() => {
-      mockedFetchTranscript.mockReset();
-    });
-
-    it("retries lang='zh' with the matching zh-Hans track and returns its segments", async () => {
-      const url = VIDEO_REFERENCE;
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "zh",
-            ["zh-Hans", "en"],
-            "dQw4w9WgXcQ"
-          )
-        )
-        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hans" }]));
-
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const result = await fetchCaptions(url, languageTag("zh"));
-
-      expect(result).not.toBeNull();
-      expect(result!.language).toBe("zh");
-      expect(result!.segments[0].text).toBe("你好");
-      expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
-      expect(mockedFetchTranscript.mock.calls[0][1]).toEqual({
-        videoDetails: true,
-        lang: "zh",
-      });
-      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
-        videoDetails: true,
-        lang: "zh-Hans",
-      });
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG]",
-        expect.objectContaining({
-          errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
-          videoId: "dQw4w9WgXcQ",
-          requested: "zh",
-          matched: "zh-Hans",
-          availableCount: 2,
-        })
-      );
-    });
-
-    it("returns null without retry when no available lang shares the primary subtag", async () => {
-      mockedFetchTranscript.mockRejectedValueOnce(
-        new YoutubeTranscriptNotAvailableLanguageError(
-          "zh",
-          ["en", "fr"],
-          "dQw4w9WgXcQ"
-        )
-      );
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("zh")
-      );
-
-      expect(result).toBeNull();
-      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
-    });
-
-    it("matches canonical aliases exactly but retries with the provider's raw token", async () => {
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "fr-CA",
-            ["und", "abc", "fra-CA", "fr-FR"],
-            "dQw4w9WgXcQ",
-          ),
-        )
-        .mockResolvedValueOnce(
-          ok([{ text: "bonjour", lang: "fra-CA" }]),
-        );
-
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("fr-CA"),
-      );
-
-      expect(result?.language).toBe("en");
-      expect(mockedFetchTranscript.mock.calls[0][1]).toEqual({
-        videoDetails: true,
-        lang: "fr-CA",
-      });
-      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
-        videoDetails: true,
-        lang: "fra-CA",
-      });
-      expect(result).not.toHaveProperty("rawToken");
-    });
-
-    it("skips unusable provider tags and preserves order for a primary fallback", async () => {
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "zh",
-            ["und", "abc", "zh-Hant-TW", "zh-Hans"],
-            "dQw4w9WgXcQ",
-          ),
-        )
-        .mockResolvedValueOnce(
-          ok([{ text: "你好", lang: "zh-Hant-TW" }]),
-        );
-
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("zh"),
-      );
-
-      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
-        videoDetails: true,
-        lang: "zh-Hant-TW",
-      });
-    });
-
-    it("returns null when a specific canonical tag has no exact provider identity", async () => {
-      mockedFetchTranscript.mockRejectedValueOnce(
-        new YoutubeTranscriptNotAvailableLanguageError(
-          "fr-CA",
-          ["fr-FR", "fr"],
-          "dQw4w9WgXcQ",
-        ),
-      );
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("fr-CA"),
-      );
-
-      expect(result).toBeNull();
-      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
-    });
-
-    it("does NOT retry when the requested lang is region-tagged (en-US)", async () => {
-      // Region-tagged callers asked for something specific. Don't second-guess
-      // by downgrading to a different en variant.
-      mockedFetchTranscript.mockRejectedValueOnce(
-        new YoutubeTranscriptNotAvailableLanguageError(
-          "en-US",
-          ["en"],
-          "dQw4w9WgXcQ"
-        )
-      );
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("en-US")
-      );
-
-      expect(result).toBeNull();
-      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
-    });
-
-    it("matches script+region variants like zh-Hant-TW", async () => {
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "zh",
-            ["zh-Hant-TW"],
-            "dQw4w9WgXcQ"
-          )
-        )
-        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hant-TW" }]));
-
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("zh")
-      );
-
-      expect(result).not.toBeNull();
-      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
-        videoDetails: true,
-        lang: "zh-Hant-TW",
-      });
-    });
-
-    it("matches case-insensitively (lang='ZH' resolves zh-Hans)", async () => {
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "ZH",
-            ["zh-Hans"],
-            "dQw4w9WgXcQ"
-          )
-        )
-        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hans" }]));
-
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("ZH")
-      );
-
-      expect(result).not.toBeNull();
-      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
-        videoDetails: true,
-        lang: "zh-Hans",
-      });
-    });
-
-    it("returns null when the retry also throws an expected no-captions error", async () => {
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "zh",
-            ["zh-Hans"],
-            "dQw4w9WgXcQ"
-          )
-        )
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableError("dQw4w9WgXcQ")
-        );
-
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("zh")
-      );
-
-      expect(result).toBeNull();
-      expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
-    });
-
-    it("rethrows when the retry throws an unexpected error (alertable, not silently null)", async () => {
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "zh",
-            ["zh-Hans"],
-            "dQw4w9WgXcQ"
-          )
-        )
-        .mockRejectedValueOnce(new TypeError("boom"));
-
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-      await expect(
-        fetchCaptions(VIDEO_REFERENCE,
-          languageTag("zh"),
-        )
-      ).rejects.toBeInstanceOf(TypeError);
-
-      expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
-      expect(errorSpy).toHaveBeenCalledWith(
-        "[captions.CAPTION_UNEXPECTED_FAILURE]",
-        expect.objectContaining({
-          errorId: "CAPTION_UNEXPECTED_FAILURE",
-          videoId: "dQw4w9WgXcQ",
-          errorClass: "TypeError",
-          originalLang: "zh",
-          retryLang: "zh-Hans",
-        })
-      );
-    });
-
-    it("picks the first matching variant in availableLangs order (preserves YouTube's track order)", async () => {
-      // YouTube returns availableLangs in track order. The retry must
-      // preserve that — a 'sort' or 'prefer simplified' refactor would
-      // silently change which variant resolves and which transcript gets
-      // cached. zh-Hant-TW comes before zh-Hans here even though zh-Hans
-      // would be the more "natural" Mandarin pick.
-      mockedFetchTranscript
-        .mockRejectedValueOnce(
-          new YoutubeTranscriptNotAvailableLanguageError(
-            "zh",
-            ["zh-Hant-TW", "zh-Hans"],
-            "dQw4w9WgXcQ"
-          )
-        )
-        .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hant-TW" }]));
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-
-      await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("zh"),
-      );
-
-      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
-        videoDetails: true,
-        lang: "zh-Hant-TW",
-      });
-    });
-
-    it("returns null without retry when availableLangs is empty", async () => {
-      // Defensive: the library could theoretically throw NotAvailableLanguage
-      // with an empty availableLangs array (e.g. a future schema where the
-      // language-mismatch class fires before track discovery completes).
-      // The adapter should fall through to "no captions" without crashing
-      // or retrying.
-      mockedFetchTranscript.mockRejectedValueOnce(
-        new YoutubeTranscriptNotAvailableLanguageError(
-          "zh",
-          [],
-          "dQw4w9WgXcQ"
-        )
-      );
-
-      const result = await fetchCaptions(VIDEO_REFERENCE,
-        languageTag("zh")
-      );
-
-      expect(result).toBeNull();
-      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
-    });
   });
 });

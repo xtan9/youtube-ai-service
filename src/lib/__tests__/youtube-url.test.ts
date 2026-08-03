@@ -21,7 +21,7 @@ describe("isYoutubeUrl", () => {
 
   it.each([
     // Arbitrary-host URLs z.string().url() would accept but that must
-    // not reach fetchCaptions / downloadAudio. This is the core guard:
+    // not reach Caption Track acquisition / audio download. This is the core guard:
     // an authed caller can't smuggle non-YouTube targets through.
     "https://attacker.example/steal?token=secret",
     "http://user:pass@evil.com/",

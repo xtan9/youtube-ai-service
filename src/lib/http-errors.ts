@@ -191,7 +191,7 @@ export function respondWithOperationalOutcome<
  */
 export function respondWithOperationalOutcomeWithoutLog(
   c: Context<ServiceEnv>,
-  outcome: "metadata-failed",
+  outcome: "captions-failed" | "metadata-failed",
 ): Response {
   const contract = operationalOutcomes[outcome];
   return createOperationalResponse(

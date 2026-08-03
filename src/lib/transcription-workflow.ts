@@ -1,4 +1,4 @@
-import type { TranscriptSegment } from "./captions.js";
+import type { TimedTextSegment } from "./timed-text.js";
 import type { AudioCompressKind } from "./audio-compress.js";
 import { probeAudioDurationSeconds } from "./audio-duration.js";
 import {
@@ -46,7 +46,7 @@ export type GroqTranscriber = (
   audioPath: string,
   language: PrimaryLanguageCode | undefined,
   signal: AbortSignal,
-) => Promise<{ segments: TranscriptSegment[]; language: string }>;
+) => Promise<{ segments: TimedTextSegment[]; language: string }>;
 
 export type TranscriptionWorkflowPolicy =
   | {
@@ -79,7 +79,7 @@ export interface TranscriptionWorkflowDependencies {
     audioPath: string,
     language: PrimaryLanguageCode | undefined,
     signal: AbortSignal,
-  ): Promise<TranscriptSegment[]>;
+  ): Promise<TimedTextSegment[]>;
   logEvent(
     level: "error" | "warn" | "info",
     event: string,
@@ -90,7 +90,7 @@ export interface TranscriptionWorkflowDependencies {
 export type TranscriptionWorkflowOutcome =
   | {
       ok: true;
-      segments: TranscriptSegment[];
+      segments: TimedTextSegment[];
     }
   | {
       ok: false;
@@ -175,7 +175,7 @@ export function createTranscriptionWorkflow(
           );
           return { ok: false, reason: "media-duration-exceeded" };
         }
-        let segments: TranscriptSegment[];
+        let segments: TimedTextSegment[];
         if (backendPolicy.backend === "local-only") {
           if (!groqKeyMissingWarned) {
             groqKeyMissingWarned = true;

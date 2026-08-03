@@ -29,9 +29,10 @@ _Avoid_: Transcript, transcription
 The conversion of a YouTube video's spoken audio into timestamped text when a suitable caption track is unavailable.
 _Avoid_: Captions, caption extraction
 
-**Transcript Segment**:
-A bounded piece of transcribed text paired with its start time and duration.
-_Avoid_: Caption, paragraph
+**Timed Text Segment**:
+A bounded piece of source-neutral timed text paired with its start time and
+duration. Caption Track acquisition and Transcription both produce this shape.
+_Avoid_: Transcript Segment, Caption, paragraph
 
 **Local Transcription Fallback**:
 A bounded local second attempt after an eligible primary Transcription failure.

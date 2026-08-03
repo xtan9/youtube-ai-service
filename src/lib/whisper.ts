@@ -2,7 +2,7 @@ import { execFile } from "child_process";
 import { readFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join, basename } from "path";
-import type { TranscriptSegment } from "./captions.js";
+import type { TimedTextSegment } from "./timed-text.js";
 import { getLanguageAnchorPrompt } from "./language-prompt.js";
 import type { PrimaryLanguageCode } from "./language-tag.js";
 import { isNodeErrorWithCode } from "./node-errors.js";
@@ -98,7 +98,7 @@ interface WhisperJsonOutput {
  * billing GPU for transcripts the frontend then renders as a single 00:00
  * legacy paragraph.
  */
-export function parseWhisperJson(json: string): TranscriptSegment[] {
+export function parseWhisperJson(json: string): TimedTextSegment[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -115,7 +115,7 @@ export function parseWhisperJson(json: string): TranscriptSegment[] {
     throw new Error("whisper JSON missing `segments` array");
   }
   const raw = (parsed as WhisperJsonOutput).segments;
-  const out: TranscriptSegment[] = [];
+  const out: TimedTextSegment[] = [];
   for (const s of raw) {
     if (
       typeof s.start !== "number" ||
@@ -145,7 +145,7 @@ export async function transcribeAudio(
   audioPath: string,
   lang?: PrimaryLanguageCode,
   signal?: AbortSignal,
-): Promise<TranscriptSegment[]> {
+): Promise<TimedTextSegment[]> {
   const jsonPath = join(
     tmpdir(),
     basename(audioPath).replace(/\.[^.]+$/, ".json"),

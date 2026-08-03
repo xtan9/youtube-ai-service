@@ -34,7 +34,7 @@ const videoInformationWorkflow: VideoInformationWorkflow =
     logEvent: logServiceEvent,
   });
 const appAdapters = {
-  fetchCaptions: vi.fn(),
+  captionTrackAcquisition: vi.fn(),
   videoInformationWorkflow,
   transcriptionWorkflow: vi.fn(),
 };
