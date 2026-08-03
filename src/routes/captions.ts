@@ -4,10 +4,13 @@ import { fetchCaptions, extractVideoId } from "../lib/captions.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
-import { readBoundedJson } from "../lib/resource-limits.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
-import { createDataRoute, type DataRouteConfig } from "./data-route.js";
+import {
+  createDataRoute,
+  readDataRequest,
+  type DataRouteConfig,
+} from "./data-route.js";
 
 type CaptionsRouteConfig = DataRouteConfig;
 
@@ -22,8 +25,8 @@ export interface CaptionsRouteDependencies {
 
 export function createCaptionsRoute(
   config: CaptionsRouteConfig,
+  admission: ResourceAdmission,
   dependencies: CaptionsRouteDependencies = { fetchCaptions },
-  admission?: ResourceAdmission,
 ): Hono<ServiceEnv> {
   const captions = createDataRoute("captions", config, admission);
 
@@ -38,27 +41,10 @@ export function createCaptionsRoute(
   });
 
   captions.post("/", async (c) => {
-    const bodyResult = await readBoundedJson(
-      c.req.raw,
-      c.get("resourceLimits").requestBodyMaxBytes,
-      c.get("workSignal"),
-    );
-    if (!bodyResult.ok && bodyResult.reason === "too_large") {
-      return respondWithOperationalOutcome(c, "request-body-too-large");
-    }
-    if (!bodyResult.ok) {
-      // Hono returns 500 by default on malformed JSON; explicit 400
-      // signals "client error" so the frontend doesn't trigger retry or
-      // alerting.
-      return respondWithOperationalOutcome(c, "invalid-json");
-    }
+    const intake = await readDataRequest(c, requestSchema);
+    if (!intake.ok) return intake.response;
 
-    const parsed = requestSchema.safeParse(bodyResult.value);
-    if (!parsed.success) {
-      return respondWithOperationalOutcome(c, "invalid-request");
-    }
-
-    const { youtube_url, lang } = parsed.data;
+    const { youtube_url, lang } = intake.data;
 
     // Log only the videoId, never the full URL. YouTube URLs are unlikely
     // to contain secrets in practice, but the zod schema above only

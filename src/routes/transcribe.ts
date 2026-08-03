@@ -2,7 +2,6 @@ import type { Hono } from "hono";
 import { z } from "zod";
 import { extractVideoId } from "../lib/captions.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
-import { readBoundedJson } from "../lib/resource-limits.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import {
@@ -11,17 +10,21 @@ import {
 } from "../lib/transcription-workflow.js";
 import type { RuntimeConfig } from "../lib/runtime-config.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
-import { createDataRoute, type DataRouteConfig } from "./data-route.js";
+import {
+  createDataRoute,
+  readDataRequest,
+  type DataRouteConfig,
+} from "./data-route.js";
 
 type TranscribeRouteConfig = DataRouteConfig &
   Pick<RuntimeConfig, "transcription" | "mediaAcquisition">;
 
 export function createTranscribeRoute(
   config: TranscribeRouteConfig,
+  admission: ResourceAdmission,
   workflow: TranscriptionWorkflow = createProductionTranscriptionWorkflow(
     config,
   ),
-  admission?: ResourceAdmission,
 ): Hono<ServiceEnv> {
   const transcribe = createDataRoute("transcribe", config, admission);
 
@@ -33,24 +36,10 @@ export function createTranscribeRoute(
   });
 
   transcribe.post("/", async (c) => {
-    const bodyResult = await readBoundedJson(
-      c.req.raw,
-      c.get("resourceLimits").requestBodyMaxBytes,
-      c.get("workSignal"),
-    );
-    if (!bodyResult.ok && bodyResult.reason === "too_large") {
-      return respondWithOperationalOutcome(c, "request-body-too-large");
-    }
-    if (!bodyResult.ok) {
-      return respondWithOperationalOutcome(c, "invalid-json");
-    }
+    const intake = await readDataRequest(c, requestSchema);
+    if (!intake.ok) return intake.response;
 
-    const parsed = requestSchema.safeParse(bodyResult.value);
-    if (!parsed.success) {
-      return respondWithOperationalOutcome(c, "invalid-request");
-    }
-
-    const { youtube_url: youtubeUrl, lang } = parsed.data;
+    const { youtube_url: youtubeUrl, lang } = intake.data;
     const videoId = extractVideoId(youtubeUrl) ?? "unknown";
     const limits = c.get("resourceLimits");
 

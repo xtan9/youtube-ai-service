@@ -12,6 +12,7 @@ import { createTranscribeRoute } from "../transcribe.js";
 import type { CaptionResult, TranscriptSegment } from "../../lib/captions.js";
 import type { YtdlpMetadata } from "../../lib/language-detect.js";
 import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
+import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 type WireResponse = {
@@ -59,16 +60,25 @@ type ContractFixtures = {
 const fixtures = fixturesJson as unknown as ContractFixtures;
 const VALID_KEY = "fixture-key";
 const testConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
+const admission = createResourceAdmission(testConfig.admission);
 const captionsDependencies: CaptionsRouteDependencies = {
   fetchCaptions: vi.fn(),
 };
-const captions = createCaptionsRoute(testConfig, captionsDependencies);
+const captions = createCaptionsRoute(
+  testConfig,
+  admission,
+  captionsDependencies,
+);
 const metadataDependencies: MetadataRouteDependencies = {
   fetchMetadata: vi.fn(),
 };
-const metadata = createMetadataRoute(testConfig, metadataDependencies);
+const metadata = createMetadataRoute(
+  testConfig,
+  admission,
+  metadataDependencies,
+);
 const workflow = vi.fn<TranscriptionWorkflow>();
-const transcribe = createTranscribeRoute(testConfig, workflow);
+const transcribe = createTranscribeRoute(testConfig, admission, workflow);
 
 type RequestableRoute = {
   request(path: string, init: RequestInit): Response | Promise<Response>;

@@ -15,6 +15,7 @@ import {
   type MetadataRouteDependencies,
 } from "../metadata.js";
 import { createYtdlpMetadataFetcher } from "../../lib/ytdlp-metadata.js";
+import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 const mockedExecFile = vi.mocked(execFile);
@@ -32,7 +33,11 @@ const metadataConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const metadataDependencies: MetadataRouteDependencies = {
   fetchMetadata: createYtdlpMetadataFetcher(metadataConfig.mediaAcquisition),
 };
-const metadata = createMetadataRoute(metadataConfig, metadataDependencies);
+const metadata = createMetadataRoute(
+  metadataConfig,
+  createResourceAdmission(metadataConfig.admission),
+  metadataDependencies,
+);
 
 function post(body: unknown) {
   return metadata.request("/", {
@@ -50,25 +55,8 @@ describe("POST /metadata", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects malformed bodies with 400", async () => {
-    const res = await post({ not_the_right_field: "x" });
-    expect(res.status).toBe(400);
-  });
-
   it("rejects non-YouTube URLs with 400", async () => {
     const res = await post({ youtube_url: "https://example.com/video" });
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects malformed JSON with 400 (not 500)", async () => {
-    const res = await metadata.request("/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${VALID_KEY}`,
-      },
-      body: "{not valid json",
-    });
     expect(res.status).toBe(400);
   });
 

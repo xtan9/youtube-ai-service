@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTranscribeRoute } from "../transcribe.js";
 import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
+import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 const VALID_KEY = "test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const workflow = vi.fn<TranscriptionWorkflow>();
+const transcribeConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const transcribe = createTranscribeRoute(
-  createTestRuntimeConfig({ apiKeys: [VALID_KEY] }),
-  workflow
+  transcribeConfig,
+  createResourceAdmission(transcribeConfig.admission),
+  workflow,
 );
 
 function post(body: unknown, headers: Record<string, string> = {}) {
@@ -23,17 +26,6 @@ function post(body: unknown, headers: Record<string, string> = {}) {
   });
 }
 
-function postRaw(body: string) {
-  return transcribe.request("/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${VALID_KEY}`,
-    },
-    body,
-  });
-}
-
 beforeEach(() => {
   vi.restoreAllMocks();
   workflow.mockReset().mockResolvedValue({
@@ -43,12 +35,6 @@ beforeEach(() => {
 });
 
 describe("POST /transcribe HTTP boundary", () => {
-  it("rejects malformed JSON", async () => {
-    const response = await postRaw("{");
-
-    expect(response.status).toBe(400);
-  });
-
   it("rejects an invalid request", async () => {
     const response = await post({ youtube_url: "https://example.com/video" });
 

@@ -11,6 +11,7 @@ import {
   type MetadataRouteDependencies,
 } from "../metadata.js";
 import { createYtdlpMetadataFetcher } from "../../lib/ytdlp-metadata.js";
+import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 const CURRENT_KEY = "current-key";
@@ -21,7 +22,11 @@ const metadataConfig = createTestRuntimeConfig({ apiKeys: [CURRENT_KEY] });
 const metadataDependencies: MetadataRouteDependencies = {
   fetchMetadata: createYtdlpMetadataFetcher(metadataConfig.mediaAcquisition),
 };
-const metadata = createMetadataRoute(metadataConfig, metadataDependencies);
+const metadata = createMetadataRoute(
+  metadataConfig,
+  createResourceAdmission(metadataConfig.admission),
+  metadataDependencies,
+);
 
 const mockedExecFile = vi.mocked(execFile);
 
@@ -100,9 +105,13 @@ describe("transcription HTTP operational contract", () => {
   );
 
   it("accepts the previous key during the documented rotation overlap", async () => {
+    const rotatingConfig = createTestRuntimeConfig({
+      apiKeys: [CURRENT_KEY, PREVIOUS_KEY],
+    });
     const rotatingMetadata = createMetadataRoute(
-      createTestRuntimeConfig({ apiKeys: [CURRENT_KEY, PREVIOUS_KEY] }),
-      metadataDependencies
+      rotatingConfig,
+      createResourceAdmission(rotatingConfig.admission),
+      metadataDependencies,
     );
     vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue({
       title: "Example",
