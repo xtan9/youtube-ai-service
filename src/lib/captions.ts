@@ -8,6 +8,12 @@ import {
   type TranscriptResult,
   type TranscriptSegment as YtTranscriptSegment,
 } from "youtube-transcript-plus";
+import {
+  areLanguageTagsEqual,
+  haveSamePrimaryLanguage,
+  parseLanguageTag,
+  type LanguageTag,
+} from "./language-tag.js";
 import { logServiceEvent } from "./observability.js";
 
 // Caption fetching must run from an IP YouTube classifies as residential —
@@ -117,23 +123,59 @@ export function extractVideoId(url: string): string | null {
   return null;
 }
 
-// youtube-transcript-plus matches a requested `lang` against the track's
-// `languageCode` with strict equality. YouTube tags Chinese tracks as
-// `zh-Hans`/`zh-Hant-TW`/etc. so a primary-subtag-only request like `"zh"`
-// silently misses and falls through to "no captions". When the library
-// throws NotAvailableLanguageError it surfaces the actual track codes via
-// `availableLangs`; this helper picks the first one whose primary subtag
-// matches the request, case-insensitive. Returns null for region-tagged
-// inputs (the caller asked for `"en-US"` specifically — don't downgrade
-// to `"en"` behind their back).
-function findSubtagMatch(
-  lang: string,
-  available: readonly string[]
-): string | null {
-  if (lang.includes("-")) return null;
-  const want = lang.toLowerCase();
+// youtube-transcript-plus matches a requested `lang` against the provider's
+// track code with strict equality. When the library reports a language miss,
+// `availableLangs` contains the provider's actual track tokens. Parse those
+// tokens into canonical identities for selection, but retain each bounded raw
+// token so a strict retry uses exactly the spelling the provider advertised.
+// A specific request must not downgrade to a sibling provider track.
+// Provider spelling is never exposed beyond this adapter.
+const MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH = 64;
+
+type ProviderCaptionTrack = Readonly<{
+  readonly languageTag: LanguageTag;
+  readonly rawToken: string;
+}>;
+
+function parseProviderCaptionTrack(input: unknown): ProviderCaptionTrack | null {
+  if (
+    typeof input !== "string" ||
+    input.length === 0 ||
+    input.length > MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH
+  ) {
+    return null;
+  }
+
+  const parsed = parseLanguageTag(input);
+  if (!parsed.ok) return null;
+
+  return Object.freeze({
+    languageTag: parsed.languageTag,
+    rawToken: input,
+  });
+}
+
+function selectProviderRetryTrack(
+  requested: LanguageTag,
+  available: readonly unknown[],
+): ProviderCaptionTrack | null {
+  const tracks = available
+    .map(parseProviderCaptionTrack)
+    .filter((track): track is ProviderCaptionTrack => track !== null);
+
+  const exact = tracks.find((track) =>
+    areLanguageTagsEqual(track.languageTag, requested),
+  );
+  if (exact) return exact;
+
+  // Only a bare primary tag permits a same-primary fallback. A specific
+  // script, region, or variant request must remain an exact identity match.
+  if (requested.tag !== requested.primaryLanguageCode) return null;
+
   return (
-    available.find((code) => code.toLowerCase().split("-")[0] === want) ?? null
+    tracks.find((track) =>
+      haveSamePrimaryLanguage(track.languageTag, requested),
+    ) ?? null
   );
 }
 
@@ -163,16 +205,27 @@ export function pickLocale(
   videoId?: string,
   requestId?: string
 ): PromptLocale {
-  const lang = segments[0]?.lang ?? "";
-  const normalized = lang.toLowerCase();
-  if (normalized.startsWith("zh")) return "zh";
-  if (!normalized.startsWith("en") && normalized !== "") {
+  const rawLang = segments[0]?.lang;
+  const parsedTag = parseLanguageTag(rawLang);
+  if (!parsedTag.ok) {
     logServiceEvent("warn", "captions.unknown_locale", {
       requestId,
       videoId,
-      lang,
+      reason: rawLang === undefined ? "missing" : parsedTag.reason,
+    });
+    return "en";
+  }
+
+  const { languageTag } = parsedTag;
+  if (languageTag.primaryLanguageCode === "zh") return "zh";
+  if (languageTag.primaryLanguageCode !== "en") {
+    logServiceEvent("warn", "captions.unknown_locale", {
+      requestId,
+      videoId,
+      lang: languageTag.tag,
     });
   }
+
   return "en";
 }
 
@@ -191,7 +244,7 @@ export function pickLocale(
  */
 export async function fetchCaptions(
   youtubeUrl: string,
-  lang?: string,
+  lang?: LanguageTag,
   requestId?: string,
   signal?: AbortSignal,
 ): Promise<CaptionResult | null> {
@@ -202,31 +255,33 @@ export async function fetchCaptions(
   try {
     const response = await fetchTranscript(videoId, {
       videoDetails: true,
-      ...(lang ? { lang } : {}),
+      ...(lang ? { lang: lang.tag } : {}),
       ...(signal ? { signal } : {}),
     });
     result = response as TranscriptResult;
   } catch (err) {
     signal?.throwIfAborted();
-    // Strict-equality match inside the library means primary-subtag
-    // requests (e.g. `"zh"`) miss region/script-tagged tracks
-    // (`"zh-Hans"`). Catch that one shape and retry with the matched
-    // code before falling through to the generic no-captions path.
+    // A strict provider miss may still have a canonical exact track (or,
+    // for a bare primary request only, a same-primary track) in the ordered
+    // available list. Retry once with that track's exact provider token.
     if (lang && err instanceof YoutubeTranscriptNotAvailableLanguageError) {
-      const matched = findSubtagMatch(lang, err.availableLangs);
+      const availableLangs = Array.isArray(err.availableLangs)
+        ? err.availableLangs
+        : [];
+      const matched = selectProviderRetryTrack(lang, availableLangs);
       if (!matched) return null;
       logServiceEvent("warn", "captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG", {
         errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
         requestId,
         videoId,
-        requested: lang,
-        matched,
-        availableCount: err.availableLangs.length,
+        requested: lang.tag,
+        matched: matched.rawToken,
+        availableCount: availableLangs.length,
       });
       try {
         const retryResponse = await fetchTranscript(videoId, {
           videoDetails: true,
-          lang: matched,
+          lang: matched.rawToken,
           ...(signal ? { signal } : {}),
         });
         result = retryResponse as TranscriptResult;
@@ -241,8 +296,8 @@ export async function fetchCaptions(
             retryErr instanceof Error
               ? retryErr.constructor.name
               : typeof retryErr,
-          originalLang: lang,
-          retryLang: matched,
+          originalLang: lang.tag,
+          retryLang: matched.rawToken,
         });
         throw retryErr;
       }

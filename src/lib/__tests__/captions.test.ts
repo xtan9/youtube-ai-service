@@ -13,6 +13,10 @@ import {
   YoutubeTranscriptNotAvailableLanguageError,
   type TranscriptSegment,
 } from "youtube-transcript-plus";
+import {
+  parseLanguageTag,
+  type LanguageTag,
+} from "../language-tag.js";
 
 // ESM module spying requires vi.mock at module scope — vi.spyOn on an
 // imported namespace fails with "Module namespace is not configurable".
@@ -25,6 +29,12 @@ vi.mock("youtube-transcript-plus", async () => {
 });
 
 const mockedFetchTranscript = vi.mocked(fetchTranscript);
+
+const languageTag = (input: string): LanguageTag => {
+  const result = parseLanguageTag(input);
+  if (!result.ok) throw new Error(`Expected a Language Tag: ${input}`);
+  return result.languageTag;
+};
 
 describe("extractVideoId", () => {
   // Spec is "URL forms the endpoint accepts" — adding to this table is
@@ -119,6 +129,24 @@ describe("pickLocale", () => {
   it("falls back to en when segments array is empty", () => {
     expect(pickLocale([])).toBe("en");
   });
+
+  it.each([undefined, "und", "abc", "not a language tag"])(
+    "warns and falls back to en when the returned track tag is unusable: %p",
+    (lang) => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      expect(pickLocale([seg(lang)], "video-id", "request-id")).toBe("en");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[captions.unknown_locale]",
+        expect.objectContaining({
+          videoId: "video-id",
+          requestId: "request-id",
+        }),
+      );
+
+      warnSpy.mockRestore();
+    },
+  );
 });
 
 describe("decodeCaptionEntities", () => {
@@ -382,10 +410,51 @@ describe("fetchCaptions", () => {
     // The whole point of this parameter: without it, the library picks
     // `tracks[0]` which for some videos is the wrong language entirely.
     mockedFetchTranscript.mockResolvedValue(ok([{ text: "bonjour", lang: "fr" }]));
-    await fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "fr");
+    await fetchCaptions(
+      "https://youtu.be/dQw4w9WgXcQ",
+      languageTag("fr"),
+    );
     const call = mockedFetchTranscript.mock.calls[0];
     expect(call[1]).toEqual({ videoDetails: true, lang: "fr" });
   });
+
+  it("derives Prompt Locale from the returned track instead of the requested tag", async () => {
+    mockedFetchTranscript.mockResolvedValue(
+      ok([{ text: "你好", lang: "zh-Hant-TW" }]),
+    );
+
+    const result = await fetchCaptions(
+      "https://youtu.be/dQw4w9WgXcQ",
+      languageTag("en"),
+    );
+
+    expect(result?.language).toBe("zh");
+  });
+
+  it.each([undefined, "und", "abc"])(
+    "warns and falls back to English when the returned track tag is unusable: %p",
+    async (returnedLang) => {
+      mockedFetchTranscript.mockResolvedValue(
+        ok([{ text: "hello", lang: returnedLang }]),
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        languageTag("zh-Hant-TW"),
+        "request-id",
+      );
+
+      expect(result?.language).toBe("en");
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[captions.unknown_locale]",
+        expect.objectContaining({
+          requestId: "request-id",
+          videoId: "dQw4w9WgXcQ",
+        }),
+      );
+    },
+  );
 
   describe("fetchCaptions: primary-subtag retry", () => {
     beforeEach(() => {
@@ -406,7 +475,7 @@ describe("fetchCaptions", () => {
 
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const result = await fetchCaptions(url, "zh");
+      const result = await fetchCaptions(url, languageTag("zh"));
 
       expect(result).not.toBeNull();
       expect(result!.language).toBe("zh");
@@ -443,7 +512,83 @@ describe("fetchCaptions", () => {
 
       const result = await fetchCaptions(
         "https://youtu.be/dQw4w9WgXcQ",
-        "zh"
+        languageTag("zh")
+      );
+
+      expect(result).toBeNull();
+      expect(mockedFetchTranscript).toHaveBeenCalledTimes(1);
+    });
+
+    it("matches canonical aliases exactly but retries with the provider's raw token", async () => {
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "fr-CA",
+            ["und", "abc", "fra-CA", "fr-FR"],
+            "dQw4w9WgXcQ",
+          ),
+        )
+        .mockResolvedValueOnce(
+          ok([{ text: "bonjour", lang: "fra-CA" }]),
+        );
+
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        languageTag("fr-CA"),
+      );
+
+      expect(result?.language).toBe("en");
+      expect(mockedFetchTranscript.mock.calls[0][1]).toEqual({
+        videoDetails: true,
+        lang: "fr-CA",
+      });
+      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
+        videoDetails: true,
+        lang: "fra-CA",
+      });
+      expect(result).not.toHaveProperty("rawToken");
+    });
+
+    it("skips unusable provider tags and preserves order for a primary fallback", async () => {
+      mockedFetchTranscript
+        .mockRejectedValueOnce(
+          new YoutubeTranscriptNotAvailableLanguageError(
+            "zh",
+            ["und", "abc", "zh-Hant-TW", "zh-Hans"],
+            "dQw4w9WgXcQ",
+          ),
+        )
+        .mockResolvedValueOnce(
+          ok([{ text: "你好", lang: "zh-Hant-TW" }]),
+        );
+
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        languageTag("zh"),
+      );
+
+      expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
+        videoDetails: true,
+        lang: "zh-Hant-TW",
+      });
+    });
+
+    it("returns null when a specific canonical tag has no exact provider identity", async () => {
+      mockedFetchTranscript.mockRejectedValueOnce(
+        new YoutubeTranscriptNotAvailableLanguageError(
+          "fr-CA",
+          ["fr-FR", "fr"],
+          "dQw4w9WgXcQ",
+        ),
+      );
+
+      const result = await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        languageTag("fr-CA"),
       );
 
       expect(result).toBeNull();
@@ -463,7 +608,7 @@ describe("fetchCaptions", () => {
 
       const result = await fetchCaptions(
         "https://youtu.be/dQw4w9WgXcQ",
-        "en-US"
+        languageTag("en-US")
       );
 
       expect(result).toBeNull();
@@ -485,7 +630,7 @@ describe("fetchCaptions", () => {
 
       const result = await fetchCaptions(
         "https://youtu.be/dQw4w9WgXcQ",
-        "zh"
+        languageTag("zh")
       );
 
       expect(result).not.toBeNull();
@@ -510,7 +655,7 @@ describe("fetchCaptions", () => {
 
       const result = await fetchCaptions(
         "https://youtu.be/dQw4w9WgXcQ",
-        "ZH"
+        languageTag("ZH")
       );
 
       expect(result).not.toBeNull();
@@ -537,7 +682,7 @@ describe("fetchCaptions", () => {
 
       const result = await fetchCaptions(
         "https://youtu.be/dQw4w9WgXcQ",
-        "zh"
+        languageTag("zh")
       );
 
       expect(result).toBeNull();
@@ -559,7 +704,10 @@ describe("fetchCaptions", () => {
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       await expect(
-        fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "zh")
+        fetchCaptions(
+          "https://youtu.be/dQw4w9WgXcQ",
+          languageTag("zh"),
+        )
       ).rejects.toBeInstanceOf(TypeError);
 
       expect(mockedFetchTranscript).toHaveBeenCalledTimes(2);
@@ -592,7 +740,10 @@ describe("fetchCaptions", () => {
         .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hant-TW" }]));
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      await fetchCaptions("https://youtu.be/dQw4w9WgXcQ", "zh");
+      await fetchCaptions(
+        "https://youtu.be/dQw4w9WgXcQ",
+        languageTag("zh"),
+      );
 
       expect(mockedFetchTranscript.mock.calls[1][1]).toEqual({
         videoDetails: true,
@@ -616,7 +767,7 @@ describe("fetchCaptions", () => {
 
       const result = await fetchCaptions(
         "https://youtu.be/dQw4w9WgXcQ",
-        "zh"
+        languageTag("zh")
       );
 
       expect(result).toBeNull();
