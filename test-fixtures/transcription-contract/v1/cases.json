@@ -166,6 +166,47 @@
       }
     },
     {
+      "id": "transcription-canonical-full-language-tag",
+      "endpoint": "/transcribe",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        "lang": "zh-Hant-TW"
+      },
+      "service": {
+        "arrange": {
+          "kind": "transcription",
+          "value": [
+            { "text": "Canonical language tag fixture output.", "start": 0, "duration": 3 }
+          ]
+        },
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Canonical language tag fixture output.", "start": 0, "duration": 3 }
+            ],
+            "transcript": "Canonical language tag fixture output.",
+            "language": "zh-Hant-TW",
+            "source": "whisper"
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 200,
+          "body": {
+            "segments": [
+              { "text": "Canonical language tag fixture output.", "start": 0, "duration": 3 }
+            ],
+            "transcript": "Canonical language tag fixture output.",
+            "language": "zh-Hant-TW",
+            "source": "whisper"
+          }
+        },
+        "expect": "success"
+      }
+    },
+    {
       "id": "transcription-503",
       "endpoint": "/transcribe",
       "request": {
@@ -432,7 +473,19 @@
       "endpoint": "/captions",
       "request": {
         "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-        "langValues": ["und", "zxx", "mul", "mis"]
+        "langValues": [
+          "und",
+          "zxx",
+          "mul",
+          "mis",
+          "auto",
+          " en",
+          "en ",
+          "en--US",
+          "en-u-ca-gregory",
+          "en-x-private",
+          "abc"
+        ]
       },
       "service": {
         "response": {

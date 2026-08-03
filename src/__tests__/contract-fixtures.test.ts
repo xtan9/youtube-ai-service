@@ -141,6 +141,7 @@ describe("transcription-http/v1 fixture manifest", () => {
         "caption-404",
         "caption-500",
         "transcription-success",
+        "transcription-canonical-full-language-tag",
         "transcription-503",
         "metadata-known-duration",
         "metadata-unknown-duration",
@@ -236,7 +237,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
     await expectWireResponse(response, fixture.service.response);
   });
 
-  it("rejects every invalid language sentinel on both data routes", async () => {
+  it("rejects every invalid language input on both data routes without provider work", async () => {
     const fixture = getCase("invalid-language-sentinels");
     const languageValues = fixture.request.langValues ?? [];
 
@@ -254,10 +255,14 @@ describe("service routes against transcription-http/v1 fixtures", () => {
         fixture.service.response
       );
     }
+
+    expect(captionsDependencies.fetchCaptions).not.toHaveBeenCalled();
+    expect(workflow).not.toHaveBeenCalled();
   });
 
   it.each([
     "transcription-success",
+    "transcription-canonical-full-language-tag",
     "legacy-transcript-only",
     "empty-segments",
   ])("serves the %s transcription fixture at the HTTP boundary", async (id) => {
@@ -280,6 +285,13 @@ describe("service routes against transcription-http/v1 fixtures", () => {
         : fixture.request
     );
     await expectWireResponse(response, fixture.service.response);
+
+    const expectedPrimaryLanguage = fixture.request.lang
+      ? languageTag(fixture.request.lang).primaryLanguageCode
+      : undefined;
+    expect(workflow).toHaveBeenCalledWith(
+      expect.objectContaining({ language: expectedPrimaryLanguage }),
+    );
   });
 
   it("serves the transcription-503 fixture without falling back to local Whisper", async () => {

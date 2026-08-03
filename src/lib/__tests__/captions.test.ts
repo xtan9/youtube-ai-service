@@ -755,8 +755,8 @@ describe("fetchCaptions", () => {
       // Defensive: the library could theoretically throw NotAvailableLanguage
       // with an empty availableLangs array (e.g. a future schema where the
       // language-mismatch class fires before track discovery completes).
-      // findSubtagMatch returns null for empty input, so we should fall
-      // through to "no captions" without crashing or retrying.
+      // The adapter should fall through to "no captions" without crashing
+      // or retrying.
       mockedFetchTranscript.mockRejectedValueOnce(
         new YoutubeTranscriptNotAvailableLanguageError(
           "zh",
