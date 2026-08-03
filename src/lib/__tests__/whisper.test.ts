@@ -8,6 +8,16 @@ import {
   transcribeAudio,
   WHISPER_CLI,
 } from "../whisper.js";
+import {
+  parseLanguageTag,
+  type PrimaryLanguageCode,
+} from "../language-tag.js";
+
+function primary(input: string): PrimaryLanguageCode {
+  const result = parseLanguageTag(input);
+  if (!result.ok) throw new Error(`Expected a language code: ${input}`);
+  return result.languageTag.primaryLanguageCode;
+}
 
 vi.mock("child_process", () => ({ execFile: vi.fn() }));
 vi.mock("fs/promises", () => ({ readFile: vi.fn(), unlink: vi.fn() }));
@@ -67,14 +77,14 @@ describe("buildWhisperArgs", () => {
   it("emits --language <code> when a lang is provided", () => {
     // whisper-ctranslate2 accepts ISO 639-1 codes directly. The flag form
     // is `--language fr` (space-separated, not `=fr`).
-    const args = buildWhisperArgs("/tmp/audio.mp3", "fr");
+    const args = buildWhisperArgs("/tmp/audio.mp3", primary("fr"));
     const langIdx = args.indexOf("--language");
     expect(langIdx).toBeGreaterThan(-1);
     expect(args[langIdx + 1]).toBe("fr");
   });
 
   it("emits --language for zh path (ensures CJK languages survive normalization)", () => {
-    const args = buildWhisperArgs("/tmp/audio.mp3", "zh");
+    const args = buildWhisperArgs("/tmp/audio.mp3", primary("zh"));
     const langIdx = args.indexOf("--language");
     expect(args[langIdx + 1]).toBe("zh");
   });
@@ -88,7 +98,7 @@ describe("buildWhisperArgs", () => {
     // hallucinated as English with `--language zh` already pinned).
     // Setting it to False makes each window independent so a single
     // bad chunk can't cascade.
-    const args = buildWhisperArgs("/tmp/audio.mp3", "zh");
+    const args = buildWhisperArgs("/tmp/audio.mp3", primary("zh"));
     const idx = args.indexOf("--condition_on_previous_text");
     expect(idx).toBeGreaterThan(-1);
     expect(args[idx + 1]).toBe("False");
@@ -102,7 +112,7 @@ describe("buildWhisperArgs", () => {
     // condition_on_previous_text=False guard handles. Asserting the
     // anchor is non-empty and contains CJK chars for zh proves it's a
     // real native-language anchor, not a stray English default.
-    const args = buildWhisperArgs("/tmp/audio.mp3", "zh");
+    const args = buildWhisperArgs("/tmp/audio.mp3", primary("zh"));
     const idx = args.indexOf("--initial_prompt");
     expect(idx).toBeGreaterThan(-1);
     const prompt = args[idx + 1];
@@ -128,7 +138,7 @@ describe("buildWhisperArgs", () => {
     // (Welsh, etc.) still gets `--language cy` and the
     // condition_on_previous_text guard, but no prompt — sending a
     // wrong-language anchor would actively reintroduce the drift.
-    const args = buildWhisperArgs("/tmp/audio.mp3", "cy");
+    const args = buildWhisperArgs("/tmp/audio.mp3", primary("cy"));
     expect(args).toContain("--language");
     const condIdx = args.indexOf("--condition_on_previous_text");
     expect(condIdx).toBeGreaterThan(-1);
@@ -205,7 +215,9 @@ describe("transcribeAudio", () => {
       },
     );
 
-    await expect(transcribeAudio("/tmp/audio.mp3", "en", signal)).rejects.toThrow();
+    await expect(
+      transcribeAudio("/tmp/audio.mp3", primary("en"), signal),
+    ).rejects.toThrow();
     expect(mockedExecFile.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({ signal }),
     );

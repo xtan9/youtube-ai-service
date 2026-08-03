@@ -9,6 +9,7 @@ import type { AudioCompressKind } from "./audio-compress.js";
 import type { TranscriptSegment } from "./captions.js";
 import { getLanguageAnchorPrompt } from "./language-prompt.js";
 import type { GroqConfig } from "./runtime-config.js";
+import type { PrimaryLanguageCode } from "./language-tag.js";
 
 // Subset of Groq's `verbose_json` response we consume. Groq's full shape
 // includes word-level timestamps and per-segment confidence; ignoring them
@@ -75,14 +76,18 @@ const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const RETRY_BACKOFF_MS = 2_000;
 
 export function createGroqTranscriber(config: GroqConfig) {
-  return (audioPath: string, lang?: string, signal?: AbortSignal) =>
+  return (
+    audioPath: string,
+    lang?: PrimaryLanguageCode,
+    signal?: AbortSignal,
+  ) =>
     transcribeWithGroq(config, audioPath, lang, signal);
 }
 
 async function transcribeWithGroq(
   config: GroqConfig,
   audioPath: string,
-  lang?: string,
+  lang?: PrimaryLanguageCode,
   signal?: AbortSignal,
 ): Promise<{ segments: TranscriptSegment[]; language: string }> {
   const { apiKey, model, timeoutMs } = config;

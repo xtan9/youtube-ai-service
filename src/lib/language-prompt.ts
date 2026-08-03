@@ -1,3 +1,5 @@
+import type { PrimaryLanguageCode } from "./language-tag.js";
+
 // Short native-language sentences passed as Whisper's `initial_prompt` /
 // Groq's `prompt`. Anchors the model to the target language even on
 // non-speech audio (silence, music, B-roll between speech) so it doesn't
@@ -38,6 +40,7 @@
 // this topic" reads as plausible video content rather than the
 // obvious meta-phrase the previous form produced. The hallucination
 // doesn't disappear — its failure mode just becomes less user-visible.
+
 const LANGUAGE_ANCHOR_PROMPTS: Record<string, string> = {
   en: "Hello everyone, today let's talk about this topic.",
   zh: "大家好，今天我们来聊一聊这个话题。",
@@ -75,30 +78,16 @@ const LANGUAGE_ANCHOR_PROMPTS: Record<string, string> = {
  * can branch on "no anchor available" without conflating it with empty
  * string.
  *
- * Accepts ISO 639-1 (`zh`), BCP-47 with region/script (`zh-Hans`,
- * `en-US`), and ISO 639-3 (only the 2-letter primary survives — 3-letter
- * codes outside the lookup return null). The frontend's `primarySubtag`
- * already normalizes before calling /transcribe, but the VPS schema
- * accepts BCP-47 directly, so doing the normalization here too means
- * `lang=zh-Hans` (a real Chinese variant) hits the zh anchor instead of
- * silently falling through to flag-only pinning and reintroducing the
- * drift bug for the dominant Chinese case.
+ * Accepts only the validated two-letter Primary Language Code produced by
+ * the language-tag policy. Returning null for an unavailable anchor keeps
+ * language validity independent from prompt-content ownership.
  *
  * Used by both the Groq transcription path (`prompt` form field) and
  * the local Whisper fallback (`--initial_prompt` flag).
  */
-export function getLanguageAnchorPrompt(lang: string | null | undefined): string | null {
+export function getLanguageAnchorPrompt(
+  lang?: PrimaryLanguageCode | null,
+): string | null {
   if (!lang) return null;
-  const lower = lang.toLowerCase().trim();
-  if (!lower) return null;
-  // Direct hit for the common case (`zh`, `en`, etc.).
-  if (LANGUAGE_ANCHOR_PROMPTS[lower]) return LANGUAGE_ANCHOR_PROMPTS[lower];
-  // BCP-47 / 3-letter: extract the primary 2-letter subtag and retry.
-  // Mirrors normalizeLanguageCode in language-detect.ts — duplicated
-  // here to keep this module independent of language-detect's
-  // transitive imports (eld bundle), but the regex is intentionally
-  // identical.
-  const match = lower.match(/^([a-z]{2})(?:-.+)?$/);
-  if (match) return LANGUAGE_ANCHOR_PROMPTS[match[1]] ?? null;
-  return null;
+  return LANGUAGE_ANCHOR_PROMPTS[lang] ?? null;
 }

@@ -4,9 +4,13 @@ import { tmpdir } from "os";
 import { join, basename } from "path";
 import type { TranscriptSegment } from "./captions.js";
 import { getLanguageAnchorPrompt } from "./language-prompt.js";
+import type { PrimaryLanguageCode } from "./language-tag.js";
 import { isNodeErrorWithCode } from "./node-errors.js";
 
-export function buildWhisperArgs(audioPath: string, lang?: string): string[] {
+export function buildWhisperArgs(
+  audioPath: string,
+  lang?: PrimaryLanguageCode,
+): string[] {
   const args = [
     audioPath,
     "--model",
@@ -139,7 +143,7 @@ export function parseWhisperJson(json: string): TranscriptSegment[] {
  */
 export async function transcribeAudio(
   audioPath: string,
-  lang?: string,
+  lang?: PrimaryLanguageCode,
   signal?: AbortSignal,
 ): Promise<TranscriptSegment[]> {
   const jsonPath = join(
