@@ -50,7 +50,7 @@ export function createMetadataRoute(
 
       const { videoInformation } = outcome;
       return c.json({
-        language: videoInformation.languageHint,
+        language: videoInformation.languageHint.primaryLanguageCode,
         title: videoInformation.title,
         description: videoInformation.description,
         duration: videoInformation.durationSeconds,

@@ -6,6 +6,7 @@ import type {
 } from "../../lib/video-information-workflow.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import { languageTag } from "../../test-support/language-metadata.js";
 
 const VALID_KEY = "test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -39,8 +40,11 @@ beforeEach(() => {
       title: "Example",
       description: "Bounded description",
       durationSeconds: null,
-      languageHint: "fr",
-      availableCaptionLanguages: ["en", "fr"],
+      languageHint: languageTag("fr"),
+      availableCaptionLanguages: [
+        languageTag("en").primaryLanguageCode,
+        languageTag("fr").primaryLanguageCode,
+      ],
     },
   });
 });

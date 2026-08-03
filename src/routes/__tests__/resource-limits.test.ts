@@ -11,6 +11,7 @@ import type { AdmissionConfig } from "../../lib/runtime-config.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { ManualClock } from "../../test-support/manual-clock.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import { languageTag } from "../../test-support/language-metadata.js";
 
 const VALID_KEY = "resource-limit-test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -76,7 +77,7 @@ beforeEach(() => {
       title: "Example",
       description: "",
       durationSeconds: 1,
-      languageHint: "en",
+      languageHint: languageTag("en"),
       availableCaptionLanguages: [],
     },
   });

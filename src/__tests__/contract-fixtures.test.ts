@@ -7,10 +7,11 @@ import {
   detectLanguage,
   extractAvailableCaptions,
 } from "../lib/language-detect.js";
-import type { YtdlpMetadata } from "../lib/ytdlp-metadata.js";
+import { normalizeYtdlpMetadata } from "../lib/ytdlp-metadata.js";
 import type { TranscriptionWorkflow } from "../lib/transcription-workflow.js";
 import type { VideoInformationWorkflow } from "../lib/video-information-workflow.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
+import { languageTag } from "../test-support/language-metadata.js";
 
 type WireResponse = {
   status: number;
@@ -180,14 +181,14 @@ describe("service routes against transcription-http/v1 fixtures", () => {
     "multilingual-language-tags",
   ])("serves the %s metadata fixture at the HTTP boundary", async (id) => {
     const fixture = getCase(id);
-    const value = fixture.service?.arrange?.value as YtdlpMetadata;
+    const value = normalizeYtdlpMetadata(fixture.service?.arrange?.value);
     videoInformationWorkflow.mockResolvedValue({
       ok: true,
       videoInformation: {
         title: value.title,
         description: value.description,
         durationSeconds: value.duration,
-        languageHint: detectLanguage(value) ?? "en",
+        languageHint: detectLanguage(value) ?? languageTag("en"),
         availableCaptionLanguages: extractAvailableCaptions(value),
       },
     });
