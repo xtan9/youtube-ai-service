@@ -111,12 +111,107 @@ describe("fetchYtdlpMetadata", () => {
     const result = await fetchYtdlpMetadata("https://youtu.be/abc");
     expect(result.title).toBe("Test Video");
     expect(result.description).toBe("A test video");
-    expect(result.language).toBe("fr");
-    expect(result.duration).toBe(213);
-    expect(result.subtitles).toEqual({ fr: [{ url: "x", ext: "vtt" }] });
-    expect(result.automatic_captions).toEqual({
-      en: [{ url: "y", ext: "vtt" }],
+    expect(result.language).toEqual({
+      tag: "fr",
+      primaryLanguageCode: "fr",
     });
+    expect(result.duration).toBe(213);
+    expect(result.subtitles).toEqual([
+      {
+        languageTag: { tag: "fr", primaryLanguageCode: "fr" },
+        tracks: [{ url: "x", ext: "vtt" }],
+      },
+    ]);
+    expect(result.automatic_captions).toEqual([
+      {
+        languageTag: { tag: "en", primaryLanguageCode: "en" },
+        tracks: [{ url: "y", ext: "vtt" }],
+      },
+    ]);
+    expect(result.languageTagRejections).toEqual([]);
+  });
+
+  it("parses provider language values into canonical full Language Tags", async () => {
+    mockExecSuccess(
+      JSON.stringify({
+        id: "abc",
+        language: "zh-hant-tw",
+        subtitles: {
+          "fra-CA": [{ url: "manual", ext: "vtt" }],
+        },
+        automatic_captions: {
+          "en-US": [{ url: "automatic", ext: "vtt" }],
+        },
+      }),
+    );
+
+    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+
+    expect(result.language).toEqual({
+      tag: "zh-Hant-TW",
+      primaryLanguageCode: "zh",
+    });
+    expect(result.subtitles).toEqual([
+      {
+        languageTag: { tag: "fr-CA", primaryLanguageCode: "fr" },
+        tracks: [{ url: "manual", ext: "vtt" }],
+      },
+    ]);
+    expect(result.automatic_captions).toEqual([
+      {
+        languageTag: { tag: "en-US", primaryLanguageCode: "en" },
+        tracks: [{ url: "automatic", ext: "vtt" }],
+      },
+    ]);
+    expect(result.languageTagRejections).toEqual([]);
+  });
+
+  it("turns rejected provider language values into no signal with bounded classifications", async () => {
+    mockExecSuccess(
+      JSON.stringify({
+        id: "abc",
+        language: "auto",
+        subtitles: {
+          "??": [{ url: "malformed", ext: "vtt" }],
+          abc: [{ url: "unsupported", ext: "vtt" }],
+          und: [{ url: "sentinel", ext: "vtt" }],
+        },
+        automatic_captions: {
+          "fr-FR": [{ url: "valid", ext: "vtt" }],
+        },
+      }),
+    );
+
+    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+
+    expect(result.language).toBeNull();
+    expect(result.subtitles).toEqual([]);
+    expect(result.automatic_captions).toHaveLength(1);
+    expect(result.languageTagRejections).toEqual([
+      { source: "uploader-language", reason: "sentinel" },
+      { source: "manual-caption-key", reason: "malformed" },
+      { source: "manual-caption-key", reason: "unsupported-primary" },
+      { source: "manual-caption-key", reason: "sentinel" },
+    ]);
+    expect(JSON.stringify(result.languageTagRejections)).not.toContain("??");
+    expect(JSON.stringify(result.languageTagRejections)).not.toContain("abc");
+  });
+
+  it("caps provider rejection details without retaining raw provider keys", async () => {
+    const subtitles = Object.fromEntries(
+      Array.from({ length: 1_500 }, (_, index) => [
+        `invalid-${index}`,
+        [{ url: "track", ext: "vtt" }],
+      ]),
+    );
+    mockExecSuccess(JSON.stringify({ id: "abc", subtitles }));
+
+    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+
+    expect(result.languageTagRejections).toHaveLength(1_000);
+    expect(JSON.stringify(result.languageTagRejections)).not.toContain(
+      "invalid-",
+    );
   });
 
   it("normalizes missing fields to safe defaults", async () => {
@@ -130,8 +225,9 @@ describe("fetchYtdlpMetadata", () => {
     expect(result.description).toBe("");
     expect(result.language).toBeNull();
     expect(result.duration).toBeNull();
-    expect(result.subtitles).toEqual({});
-    expect(result.automatic_captions).toEqual({});
+    expect(result.subtitles).toEqual([]);
+    expect(result.automatic_captions).toEqual([]);
+    expect(result.languageTagRejections).toEqual([]);
   });
 
   it.each([
@@ -284,16 +380,18 @@ describe("fetchYtdlpMetadata", () => {
 
     const result = await fetchYtdlpMetadata("https://youtu.be/abc");
 
-    expect(result.subtitles.en).toEqual([
-      { url: "manual", ext: "vtt" },
-      { url: "", ext: "" },
+    expect(result.subtitles).toEqual([
+      {
+        languageTag: { tag: "en", primaryLanguageCode: "en" },
+        tracks: [
+          { url: "manual", ext: "vtt" },
+          { url: "", ext: "" },
+        ],
+      },
     ]);
-    expect(
-      Object.prototype.hasOwnProperty.call(result.subtitles, "__proto__"),
-    ).toBe(true);
-    expect(result.subtitles["__proto__"]).toEqual([
-      { url: "safe", ext: "vtt" },
+    expect(result.automatic_captions).toEqual([]);
+    expect(result.languageTagRejections).toEqual([
+      { source: "manual-caption-key", reason: "malformed" },
     ]);
-    expect(result.automatic_captions).toEqual({});
   });
 });

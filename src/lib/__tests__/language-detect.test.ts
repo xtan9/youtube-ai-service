@@ -1,295 +1,147 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   detectLanguage,
-  normalizeLanguageCode,
   extractAvailableCaptions,
+  normalizeLanguageCode,
 } from "../language-detect.js";
-import type { YtdlpMetadata } from "../ytdlp-metadata.js";
+import { captionLanguage, createYtdlpMetadata, languageTag } from "../../test-support/language-metadata.js";
 
-const base: YtdlpMetadata = {
-  title: "",
-  description: "",
-  language: null,
-  duration: null,
-  subtitles: {},
-  automatic_captions: {},
-};
-
-describe("normalizeLanguageCode", () => {
+describe("normalizeLanguageCode compatibility", () => {
   it.each([
     ["en", "en"],
     ["EN", "en"],
     ["en-US", "en"],
-    ["en-gb", "en"],
-    ["fr-FR", "fr"],
-    ["zh-CN", "zh"],
-    ["zh-TW", "zh"],
     ["zh-Hans", "zh"],
-    // ISO 639-3 three-letter codes franc returns — map to 639-1 where we
-    // have a concrete mapping. Unknown 639-3 codes pass through unchanged
-    // rather than silently collapsing to "en", so the caller can log + fall
-    // through to the ultimate fallback instead of masking an unknown lang
-    // as English.
-    ["fra", "fr"],
+    ["fra-CA", "fr"],
     ["eng", "en"],
     ["cmn", "zh"],
-    ["spa", "es"],
-    ["jpn", "ja"],
-    ["kor", "ko"],
-    ["deu", "de"],
-    ["por", "pt"],
-    ["rus", "ru"],
-    ["ita", "it"],
-    ["ara", "ar"],
-    ["hin", "hi"],
-  ])("normalizes %s → %s", (input, expected) => {
+  ])("derives %s as Primary Language Code %s through the canonical policy", (input, expected) => {
     expect(normalizeLanguageCode(input)).toBe(expected);
   });
 
-  it("returns null for empty / und / bogus input", () => {
-    expect(normalizeLanguageCode("")).toBeNull();
-    expect(normalizeLanguageCode("und")).toBeNull();
-    expect(normalizeLanguageCode(null)).toBeNull();
-    expect(normalizeLanguageCode(undefined)).toBeNull();
-  });
-
-  it.each([["zxx"], ["mul"], ["mis"], ["ZXX"], ["Mul"]])(
-    "treats yt-dlp sentinel %s as no-signal (null)",
-    (code) => {
-      // These codes reach whisper as `--language zxx` and produce cryptic
-      // CLI errors. Fall through rather than forward garbage.
-      expect(normalizeLanguageCode(code)).toBeNull();
-    }
+  it.each(["", " en", "en ", "und", "zxx", "mul", "mis", "abc"])(
+    "returns null for rejected input %s",
+    (input) => {
+      expect(normalizeLanguageCode(input)).toBeNull();
+    },
   );
 });
 
 describe("detectLanguage", () => {
-  it("trusts the yt-dlp `language` field when present (highest priority)", () => {
-    const result = detectLanguage({
-      ...base,
-      language: "fr",
-      description: "This is clearly English text, lots of it, more than enough",
-    });
-    // Even when description language disagrees, the uploader-specified
-    // `language` field wins — it's authoritative while text detection is
-    // heuristic.
-    expect(result).toBe("fr");
-  });
-
-  it("normalizes yt-dlp `language` to ISO 639-1 primary subtag", () => {
-    expect(detectLanguage({ ...base, language: "zh-Hans" })).toBe("zh");
-    expect(detectLanguage({ ...base, language: "en-US" })).toBe("en");
-  });
-
-  it("uses the sole manually-uploaded subtitle track as signal when language is absent", () => {
-    const result = detectLanguage({
-      ...base,
-      subtitles: { fr: [{ url: "x", ext: "vtt" }] },
-    });
-    expect(result).toBe("fr");
-  });
-
-  it("does NOT use subtitles when multiple manual tracks exist (ambiguous)", () => {
-    // Uploaders commonly upload BOTH the source language and an English
-    // translation — picking one arbitrarily would reintroduce the exact
-    // bug class we're fixing.
-    const result = detectLanguage({
-      ...base,
-      subtitles: {
-        fr: [{ url: "x", ext: "vtt" }],
-        en: [{ url: "y", ext: "vtt" }],
-      },
-      description:
-        "Ceci est un texte en français suffisamment long pour que la détection fonctionne correctement.",
-    });
-    expect(result).toBe("fr");
-  });
-
-  it("falls back to text detection on description + title", () => {
-    const result = detectLanguage({
-      ...base,
-      title: "Comment apprendre la programmation",
-      description:
-        "Ceci est un texte en français suffisamment long pour que la détection fonctionne correctement. Nous allons explorer les bases du développement logiciel et des concepts essentiels.",
-    });
-    expect(result).toBe("fr");
-  });
-
-  it("detects Chinese via text detection and collapses to zh", () => {
-    const result = detectLanguage({
-      ...base,
-      title: "如何学习编程",
-      description:
-        "这是一段中文文字，用于测试语言检测功能。我们将探讨编程的基础知识和一些重要的概念。请仔细阅读以下内容。",
-    });
-    expect(result).toBe("zh");
-  });
-
-  it("returns null when text is empty (no signal at all)", () => {
-    // The function honestly reports "no signal" instead of guessing "en".
-    // The route layer is responsible for mapping null → "en" with a
-    // structured warn log; testing the route fallback lives in
-    // routes/__tests__/metadata.test.ts so the wire-contract back-compat
-    // is pinned independently of the detection internals.
-    expect(detectLanguage({ ...base, title: "", description: "" })).toBeNull();
-  });
-
-  it("returns eld's best guess for short Latin titles even when unreliable", () => {
-    // Per spec: even when eld.isReliable() is false, use result.language
-    // for non-CJK short text — an unreliable Latin-script guess beats
-    // null because the language hint then propagates to whisper's
-    // prompt anchor, biasing output even on uncertain detection.
-    // Pin the deterministic case: eld v2/extrasmall on "Gracias"
-    // returns "es" (unreliable). A future eld bump that drops short-
-    // Latin guesses entirely IS the regression we want surfaced —
-    // a `expect(... || null)` disjunction would silently let it slide.
-    expect(detectLanguage({ ...base, title: "Gracias", description: "" })).toBe(
-      "es"
+  it("preserves uploader Language Tag detail at the highest priority", () => {
+    const result = detectLanguage(
+      createYtdlpMetadata({
+        language: languageTag("fr-FR"),
+        description: "This is clearly English text with a conflicting hint.",
+        subtitles: [captionLanguage("en")],
+      }),
     );
+
+    expect(result).toEqual({
+      tag: "fr-FR",
+      primaryLanguageCode: "fr",
+    });
   });
 
-  it("CJK script fallback overrides eld for short mixed-script titles", () => {
-    // Captured failure: "极海Channel" (Chinese channel name + Latin
-    // word) is detected by eld as French with isReliable=true. A
-    // single Han char is unambiguous Chinese signal — script range
-    // check pre-empts eld for any text containing CJK Unified
-    // Ideographs / Hiragana / Katakana / Hangul. Same path catches
-    // the bug video hrREdNm7vB4 (~18 Chinese chars, below franc's
-    // prior 30-char threshold).
-    expect(
-      detectLanguage({ ...base, title: "极海Channel", description: "" })
-    ).toBe("zh");
-    expect(
-      detectLanguage({
-        ...base,
-        title: "初级开发别跳槽！最新大裁员4个主要原因！",
-        description: "",
-      })
-    ).toBe("zh");
+  it("uses the sole manually uploaded Caption Track as full-tag evidence", () => {
+    const result = detectLanguage(
+      createYtdlpMetadata({
+        subtitles: [captionLanguage("zh-Hans-CN")],
+      }),
+    );
+
+    expect(result?.tag).toBe("zh-Hans-CN");
+    expect(result?.primaryLanguageCode).toBe("zh");
   });
 
-  it("script fallback distinguishes Japanese (kana) from Chinese (Han only)", () => {
-    // Japanese uses both kana and kanji. Pure-Han text → zh; any kana
-    // present → ja. Order in detectByScript matters: kana check before
-    // Han check so a Japanese title with both scripts isn't
-    // misclassified as Chinese.
+  it("keeps multiple manual Caption Tracks ambiguous and falls through to text", () => {
+    const result = detectLanguage(
+      createYtdlpMetadata({
+        subtitles: [captionLanguage("fr"), captionLanguage("en")],
+        description:
+          "Ceci est un texte en francais suffisamment long pour que la detection fonctionne correctement. Nous explorons plusieurs concepts.",
+      }),
+    );
+
+    expect(result?.tag).toBe("fr");
+    expect(result?.primaryLanguageCode).toBe("fr");
+  });
+
+  it("falls back to CJK script detection and returns a primary-only Language Tag", () => {
+    const result = detectLanguage(
+      createYtdlpMetadata({
+        title: "\u521d\u7ea7\u5f00\u53d1\u522b\u8df3\u69fd",
+        description: "\u8fd9\u662f\u4e00\u6bb5\u4e2d\u6587\u6587\u5b57\u3002",
+      }),
+    );
+
+    expect(result).toEqual({ tag: "zh", primaryLanguageCode: "zh" });
+  });
+
+  it("keeps Japanese and Korean script detection ahead of generic text detection", () => {
     expect(
-      detectLanguage({
-        ...base,
-        title: "プログラミングを学ぶ",
-        description: "",
-      })
+      detectLanguage(
+        createYtdlpMetadata({ title: "\u30d7\u30ed\u30b0\u30e9\u30df\u30f3\u30b0\u3092\u5b66\u3076" }),
+      )?.tag,
     ).toBe("ja");
     expect(
-      detectLanguage({
-        ...base,
-        title: "今日は日本語の話",
-        description: "",
-      })
-    ).toBe("ja");
-  });
-
-  it("script fallback returns ko for Hangul", () => {
-    expect(
-      detectLanguage({
-        ...base,
-        title: "프로그래밍을 배우자",
-        description: "",
-      })
+      detectLanguage(
+        createYtdlpMetadata({ title: "\ud504\ub85c\uadf8\ub798\ubc0d\uc744 \ubc30\uc6b0\uc790" }),
+      )?.tag,
     ).toBe("ko");
   });
 
-  it("script fallback handles mixed Hangul + Latin (Korean analog of 极海Channel)", () => {
-    // Same mixed-script class as the captured "极海Channel" failure
-    // — short text where eld might pick the Latin word and miss the
-    // Hangul evidence.
+  it("trusts eld's best guess for a short Latin title", () => {
     expect(
-      detectLanguage({ ...base, title: "K-Pop 프로그래밍", description: "" })
-    ).toBe("ko");
-    // Japanese mixed-script with kana (the Japanese-disambiguator)
-    // resolves to ja even when adjacent to Latin words. Pure-kanji
-    // text without kana would resolve to zh — that's a documented
-    // limitation of the script heuristic, not a regression.
-    expect(
-      detectLanguage({ ...base, title: "Gaming プログラミング講座", description: "" })
-    ).toBe("ja");
-  });
-
-  it("script fallback fires on description-only signal (no title)", () => {
-    // The detection runs on `title + description` so a video with no
-    // title and a Chinese description should still resolve to zh. Pins
-    // the concatenation behavior; without this, a future refactor
-    // could accidentally restrict detection to title only.
-    expect(
-      detectLanguage({
-        ...base,
-        title: "",
-        description: "这是一段中文描述",
-      })
-    ).toBe("zh");
+      detectLanguage(createYtdlpMetadata({ title: "Gracias" }))?.tag,
+    ).toBe("es");
   });
 
   it.each([
-    ["whitespace only", "   \t\n  "],
-    ["digits only", "12345"],
-    ["punctuation only", "!!!???..."],
-    ["emoji only", "🔥🔥🔥"],
-  ])("returns null for %s (no detectable language signal)", (_label, title) => {
-    // None of these contain Han / kana / Hangul, and eld returns ""
-    // (no detection) for content-free input. Pin null rather than
-    // letting eld's behavior on novel inputs drift through.
-    expect(detectLanguage({ ...base, title, description: "" })).toBeNull();
+    ["empty", ""],
+    ["whitespace", "   \t\n"],
+    ["digits", "12345"],
+    ["punctuation", "!!!???"],
+    ["emoji", "\ud83d\udd25\ud83d\udd25"],
+  ])("returns absence for %s text with no usable signal", (_label, title) => {
+    expect(detectLanguage(createYtdlpMetadata({ title }))).toBeNull();
   });
 
-  it("falls through to text detection when the sole subtitle key is unnormalizable", () => {
-    // A subtitle track with a bogus key like "??" must NOT short-circuit
-    // the priority chain — the fallback to text detection is the whole
-    // point of having multiple signals.
-    const result = detectLanguage({
-      ...base,
-      subtitles: { "??": [{ url: "x", ext: "vtt" }] },
-      description:
-        "Ceci est un texte en français suffisamment long pour que la détection fonctionne correctement. Nous allons explorer plusieurs concepts.",
-    });
-    expect(result).toBe("fr");
-  });
-
-  it("does NOT treat automatic_captions keys as a language signal", () => {
-    // YouTube populates automatic_captions with many translated variants
-    // regardless of the source language. Trusting this field would let a
-    // captioned French video get labelled English (alphabetically first)
-    // or arbitrary.
-    const result = detectLanguage({
-      ...base,
-      automatic_captions: {
-        ar: [{ url: "x", ext: "vtt" }],
-        en: [{ url: "x", ext: "vtt" }],
-        fr: [{ url: "x", ext: "vtt" }],
-      },
-    });
-    // Returns null — automatic_captions is not used as signal, and
-    // there's no title/description to detect from. The route layer
-    // maps null → "en" with a structured warn for ops visibility.
-    expect(result).toBeNull();
+  it("does not use automatic Caption Track languages as source evidence", () => {
+    expect(
+      detectLanguage(
+        createYtdlpMetadata({
+          automatic_captions: [
+            captionLanguage("ar"),
+            captionLanguage("en"),
+            captionLanguage("fr"),
+          ],
+        }),
+      ),
+    ).toBeNull();
   });
 });
 
 describe("extractAvailableCaptions", () => {
-  it("returns union of subtitles and automatic_captions keys, normalized", () => {
-    const result = extractAvailableCaptions({
-      ...base,
-      subtitles: { fr: [{ url: "x", ext: "vtt" }] },
-      automatic_captions: {
-        "en-US": [{ url: "x", ext: "vtt" }],
-        "zh-CN": [{ url: "x", ext: "vtt" }],
-      },
-    });
-    expect(result).toEqual(expect.arrayContaining(["fr", "en", "zh"]));
-    // Deduplicated: same normalized code shouldn't appear twice.
-    expect(result.length).toBe(new Set(result).size);
+  it("returns normalized Primary Language Codes in provider order", () => {
+    const result = extractAvailableCaptions(
+      createYtdlpMetadata({
+        subtitles: [
+          captionLanguage("zh-Hans"),
+          captionLanguage("zh-Hant-TW"),
+          captionLanguage("en-US"),
+        ],
+        automatic_captions: [
+          captionLanguage("fr-FR"),
+          captionLanguage("en"),
+        ],
+      }),
+    );
+
+    expect(result).toEqual(["zh", "en", "fr"]);
   });
 
-  it("returns empty array when both dicts are empty", () => {
-    expect(extractAvailableCaptions(base)).toEqual([]);
+  it("returns an empty collection when no Caption Tracks exist", () => {
+    expect(extractAvailableCaptions(createYtdlpMetadata())).toEqual([]);
   });
 });

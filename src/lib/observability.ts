@@ -28,6 +28,7 @@ const SAFE_FIELDS = new Set([
   "availableCount",
   "originalLang",
   "retryLang",
+  "rejectionCount",
 ]);
 
 const URL_PATTERN = /https?:\/\/\S+/gi;

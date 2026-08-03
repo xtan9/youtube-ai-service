@@ -12,6 +12,7 @@ import {
 import { logServiceEvent } from "../lib/observability.js";
 import type { YtdlpMetadata } from "../lib/ytdlp-metadata.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
+import { createYtdlpMetadata, languageTag } from "../test-support/language-metadata.js";
 
 const CURRENT_KEY = "current-key";
 const PREVIOUS_KEY = "previous-key";
@@ -54,14 +55,14 @@ function metadataRequest(
 describe("transcription HTTP operational contract", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    fetchMetadata.mockReset().mockResolvedValue({
-      title: "Example",
-      description: "A description",
-      language: "en",
-      duration: 42,
-      subtitles: {},
-      automatic_captions: {},
-    });
+    fetchMetadata.mockReset().mockResolvedValue(
+      createYtdlpMetadata({
+        title: "Example",
+        description: "A description",
+        language: languageTag("en"),
+        duration: 42,
+      }),
+    );
   });
 
   it("keeps health unauthenticated and returns only minimal status", async () => {
@@ -107,14 +108,14 @@ describe("transcription HTTP operational contract", () => {
       apiKeys: [CURRENT_KEY, PREVIOUS_KEY],
     });
     const rotatingApp = createApp(rotatingConfig, appAdapters);
-    fetchMetadata.mockResolvedValue({
-      title: "Example",
-      description: "A description",
-      language: "en",
-      duration: 42,
-      subtitles: {},
-      automatic_captions: {},
-    });
+    fetchMetadata.mockResolvedValue(
+      createYtdlpMetadata({
+        title: "Example",
+        description: "A description",
+        language: languageTag("en"),
+        duration: 42,
+      }),
+    );
 
     const response = await rotatingApp.request("/metadata", {
       method: "POST",
