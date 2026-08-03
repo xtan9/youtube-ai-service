@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("child_process", () => ({
-  execFile: vi.fn(),
-}));
-
-import { execFile } from "child_process";
 import { createApp } from "../app.js";
-import type { MetadataRouteDependencies } from "../routes/metadata.js";
-import { createYtdlpMetadataFetcher } from "../lib/ytdlp-metadata.js";
+import {
+  createVideoInformationWorkflow,
+  type VideoInformationWorkflow,
+} from "../lib/video-information-workflow.js";
+import {
+  detectLanguage,
+  extractAvailableCaptions,
+} from "../lib/language-detect.js";
+import { logServiceEvent } from "../lib/observability.js";
+import type { YtdlpMetadata } from "../lib/ytdlp-metadata.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
 
 const CURRENT_KEY = "current-key";
@@ -15,20 +18,22 @@ const PREVIOUS_KEY = "previous-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const REQUEST_ID = "req-148-example";
 const metadataConfig = createTestRuntimeConfig({ apiKeys: [CURRENT_KEY] });
-const productionFetchMetadata = createYtdlpMetadataFetcher(
-  metadataConfig.mediaAcquisition,
-);
-const metadataDependencies: MetadataRouteDependencies = {
-  fetchMetadata: vi.fn(productionFetchMetadata),
-};
+const fetchMetadata = vi.fn<
+  (url: string, signal: AbortSignal) => Promise<YtdlpMetadata>
+>();
+const videoInformationWorkflow: VideoInformationWorkflow =
+  createVideoInformationWorkflow({
+    fetchMetadata,
+    detectLanguage,
+    extractAvailableCaptions,
+    logEvent: logServiceEvent,
+  });
 const appAdapters = {
   fetchCaptions: vi.fn(),
-  fetchMetadata: metadataDependencies.fetchMetadata,
+  videoInformationWorkflow,
   transcriptionWorkflow: vi.fn(),
 };
 const app = createApp(metadataConfig, appAdapters);
-
-const mockedExecFile = vi.mocked(execFile);
 
 function metadataRequest(
   headers: Record<string, string> = {},
@@ -49,25 +54,14 @@ function metadataRequest(
 describe("transcription HTTP operational contract", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(metadataDependencies.fetchMetadata)
-      .mockReset()
-      .mockImplementation(productionFetchMetadata);
-    mockedExecFile.mockImplementation(
-      // @ts-expect-error execFile overloads do not narrow cleanly in mocks
-      (_command, _args, _options, callback) => {
-        callback?.(
-          null,
-          JSON.stringify({
-            id: "dQw4w9WgXcQ",
-            title: "Example",
-            description: "A description",
-            language: "en",
-            duration: 42,
-          }),
-          ""
-        );
-      }
-    );
+    fetchMetadata.mockReset().mockResolvedValue({
+      title: "Example",
+      description: "A description",
+      language: "en",
+      duration: 42,
+      subtitles: {},
+      automatic_captions: {},
+    });
   });
 
   it("keeps health unauthenticated and returns only minimal status", async () => {
@@ -113,7 +107,7 @@ describe("transcription HTTP operational contract", () => {
       apiKeys: [CURRENT_KEY, PREVIOUS_KEY],
     });
     const rotatingApp = createApp(rotatingConfig, appAdapters);
-    vi.mocked(metadataDependencies.fetchMetadata).mockResolvedValue({
+    fetchMetadata.mockResolvedValue({
       title: "Example",
       description: "A description",
       language: "en",
@@ -157,7 +151,7 @@ describe("transcription HTTP operational contract", () => {
   it("does not log full YouTube URLs or content when a provider fails", async () => {
     const errorMessage =
       `provider failed for ${VIDEO_URL}?token=secret Transcript: private text`;
-    vi.mocked(metadataDependencies.fetchMetadata).mockRejectedValue(
+    fetchMetadata.mockRejectedValue(
       new Error(errorMessage)
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

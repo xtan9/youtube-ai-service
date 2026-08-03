@@ -9,6 +9,7 @@ import {
 } from "../metadata.js";
 import { createTranscribeRoute } from "../transcribe.js";
 import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
+import type { VideoInformationWorkflow } from "../../lib/video-information-workflow.js";
 import type { AdmissionConfig } from "../../lib/runtime-config.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { ManualClock } from "../../test-support/manual-clock.js";
@@ -18,7 +19,7 @@ const VALID_KEY = "resource-limit-test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const workflowMock = vi.fn<TranscriptionWorkflow>();
 const metadataDependencies: MetadataRouteDependencies = {
-  fetchMetadata: vi.fn(),
+  videoInformationWorkflow: vi.fn<VideoInformationWorkflow>(),
 };
 const captionsDependencies: CaptionsRouteDependencies = {
   fetchCaptions: vi.fn(),
@@ -74,23 +75,28 @@ beforeEach(() => {
     ok: true,
     segments: [{ text: "ok", start: 0, duration: 1 }],
   });
-  vi.mocked(metadataDependencies.fetchMetadata).mockReset();
+  vi.mocked(metadataDependencies.videoInformationWorkflow)
+    .mockReset()
+    .mockResolvedValue({
+      ok: true,
+      videoInformation: {
+        title: "Example",
+        description: "",
+        durationSeconds: 1,
+        languageHint: "en",
+        availableCaptionLanguages: [],
+      },
+    });
   vi.mocked(captionsDependencies.fetchCaptions).mockReset();
 });
 
 describe("transcription resource limits", () => {
   it("rejects an oversized JSON body before invoking the provider", async () => {
     const { metadata } = createRoutes({ requestBodyMaxBytes: 64 });
-    const provider = vi
-      .spyOn(metadataDependencies, "fetchMetadata")
-      .mockResolvedValue({
-        title: "unused",
-        description: "",
-        language: "en",
-        duration: 1,
-        subtitles: {},
-        automatic_captions: {},
-      });
+    const provider = vi.spyOn(
+      metadataDependencies,
+      "videoInformationWorkflow",
+    );
 
     const response = await post(metadata, {
       youtube_url: VIDEO_URL,

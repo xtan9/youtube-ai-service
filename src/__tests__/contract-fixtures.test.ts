@@ -2,10 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import fixturesJson from "../../test-fixtures/transcription-contract/v1/cases.json";
 import { createApp } from "../app.js";
 import type { CaptionsRouteDependencies } from "../routes/captions.js";
-import type { MetadataRouteDependencies } from "../routes/metadata.js";
 import type { CaptionResult, TranscriptSegment } from "../lib/captions.js";
+import {
+  detectLanguage,
+  extractAvailableCaptions,
+} from "../lib/language-detect.js";
 import type { YtdlpMetadata } from "../lib/ytdlp-metadata.js";
 import type { TranscriptionWorkflow } from "../lib/transcription-workflow.js";
+import type { VideoInformationWorkflow } from "../lib/video-information-workflow.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
 
 type WireResponse = {
@@ -56,13 +60,11 @@ const testConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const captionsDependencies: CaptionsRouteDependencies = {
   fetchCaptions: vi.fn(),
 };
-const metadataDependencies: MetadataRouteDependencies = {
-  fetchMetadata: vi.fn(),
-};
+const videoInformationWorkflow = vi.fn<VideoInformationWorkflow>();
 const workflow = vi.fn<TranscriptionWorkflow>();
 const app = createApp(testConfig, {
   fetchCaptions: captionsDependencies.fetchCaptions,
-  fetchMetadata: metadataDependencies.fetchMetadata,
+  videoInformationWorkflow,
   transcriptionWorkflow: workflow,
 });
 
@@ -168,7 +170,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.mocked(captionsDependencies.fetchCaptions).mockReset();
-    vi.mocked(metadataDependencies.fetchMetadata).mockReset();
+    videoInformationWorkflow.mockReset();
     workflow.mockReset().mockResolvedValue({ ok: true, segments: [] });
   });
 
@@ -179,7 +181,16 @@ describe("service routes against transcription-http/v1 fixtures", () => {
   ])("serves the %s metadata fixture at the HTTP boundary", async (id) => {
     const fixture = getCase(id);
     const value = fixture.service?.arrange?.value as YtdlpMetadata;
-    vi.mocked(metadataDependencies.fetchMetadata).mockResolvedValue(value);
+    videoInformationWorkflow.mockResolvedValue({
+      ok: true,
+      videoInformation: {
+        title: value.title,
+        description: value.description,
+        durationSeconds: value.duration,
+        languageHint: detectLanguage(value) ?? "en",
+        availableCaptionLanguages: extractAvailableCaptions(value),
+      },
+    });
 
     const response = await post(
       "/metadata",

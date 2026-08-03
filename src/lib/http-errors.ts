@@ -185,6 +185,24 @@ export function respondWithOperationalOutcome<
 }
 
 /**
+ * Map an already-classified workflow outcome without emitting a second
+ * provider-failure event. The workflow owns diagnostics for failures that it
+ * has observed; the route only owns the stable HTTP envelope.
+ */
+export function respondWithOperationalOutcomeWithoutLog(
+  c: Context<ServiceEnv>,
+  outcome: "metadata-failed",
+): Response {
+  const contract = operationalOutcomes[outcome];
+  return createOperationalResponse(
+    c,
+    contract.status,
+    contract.message,
+    contract.errorId,
+  );
+}
+
+/**
  * Return the stable, bounded error envelope shared by every data endpoint.
  * Provider details belong in structured server logs, never in this body.
  */
