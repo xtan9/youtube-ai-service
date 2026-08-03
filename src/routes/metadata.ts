@@ -10,11 +10,14 @@ import { extractVideoId } from "../lib/captions.js";
 import { youtubeUrlSchema } from "../lib/youtube-url.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
-import { readBoundedJson } from "../lib/resource-limits.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import type { RuntimeConfig } from "../lib/runtime-config.js";
-import { createDataRoute, type DataRouteConfig } from "./data-route.js";
+import {
+  createDataRoute,
+  readDataRequest,
+  type DataRouteConfig,
+} from "./data-route.js";
 
 type MetadataRouteConfig = DataRouteConfig &
   Pick<RuntimeConfig, "mediaAcquisition">;
@@ -25,10 +28,10 @@ export interface MetadataRouteDependencies {
 
 export function createMetadataRoute(
   config: MetadataRouteConfig,
+  admission: ResourceAdmission,
   dependencies: MetadataRouteDependencies = {
     fetchMetadata: createYtdlpMetadataFetcher(config.mediaAcquisition),
   },
-  admission?: ResourceAdmission,
 ): Hono<ServiceEnv> {
   const metadata = createDataRoute("metadata", config, admission);
 
@@ -37,26 +40,10 @@ export function createMetadataRoute(
   });
 
   metadata.post("/", async (c) => {
-    const bodyResult = await readBoundedJson(
-      c.req.raw,
-      c.get("resourceLimits").requestBodyMaxBytes,
-      c.get("workSignal"),
-    );
-    if (!bodyResult.ok && bodyResult.reason === "too_large") {
-      return respondWithOperationalOutcome(c, "request-body-too-large");
-    }
-    if (!bodyResult.ok) {
-      // Explicit 400 so malformed bodies are client errors, not 500s. Same
-      // convention as /captions and /transcribe.
-      return respondWithOperationalOutcome(c, "invalid-json");
-    }
+    const intake = await readDataRequest(c, requestSchema);
+    if (!intake.ok) return intake.response;
 
-    const parsed = requestSchema.safeParse(bodyResult.value);
-    if (!parsed.success) {
-      return respondWithOperationalOutcome(c, "invalid-request");
-    }
-
-    const { youtube_url } = parsed.data;
+    const { youtube_url } = intake.data;
     const videoId = extractVideoId(youtube_url) ?? "unknown";
 
     try {

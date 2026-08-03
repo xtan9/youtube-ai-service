@@ -33,10 +33,19 @@ function createRoutes(
     apiKeys: [VALID_KEY],
     admission,
   });
+  const resourceAdmission = createResourceAdmission(config.admission);
   return {
-    captions: createCaptionsRoute(config, captionsDependencies),
-    metadata: createMetadataRoute(config, metadataDependencies),
-    transcribe: createTranscribeRoute(config, workflowMock),
+    captions: createCaptionsRoute(
+      config,
+      resourceAdmission,
+      captionsDependencies,
+    ),
+    metadata: createMetadataRoute(
+      config,
+      resourceAdmission,
+      metadataDependencies,
+    ),
+    transcribe: createTranscribeRoute(config, resourceAdmission, workflowMock),
   };
 }
 
@@ -223,6 +232,7 @@ describe("transcription resource limits", () => {
     });
     const captions = createCaptionsRoute(
       config,
+      createResourceAdmission(config.admission, clock),
       {
         fetchCaptions: (_url, _lang, _requestId, signal) => {
           receivedSignal = signal;
@@ -234,7 +244,6 @@ describe("transcription resource limits", () => {
           });
         },
       },
-      createResourceAdmission(config.admission, clock),
     );
 
     const responsePromise = post(captions, { youtube_url: VIDEO_URL });

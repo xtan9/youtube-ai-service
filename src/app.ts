@@ -14,9 +14,9 @@ export function createApp(config: RuntimeConfig): Hono<ServiceEnv> {
 
   app.use("*", logger());
   app.route("/", health);
-  app.route("/transcribe", createTranscribeRoute(config, undefined, admission));
-  app.route("/captions", createCaptionsRoute(config, undefined, admission));
-  app.route("/metadata", createMetadataRoute(config, undefined, admission));
+  app.route("/transcribe", createTranscribeRoute(config, admission));
+  app.route("/captions", createCaptionsRoute(config, admission));
+  app.route("/metadata", createMetadataRoute(config, admission));
 
   return app;
 }

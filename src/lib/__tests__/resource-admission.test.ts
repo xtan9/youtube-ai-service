@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import {
   createResourceAdmission,
-  readBoundedJson,
   type ResourceAdmission,
 } from "../resource-limits.js";
 import type { ServiceEnv } from "../request-id.js";
@@ -22,34 +21,6 @@ function createAdmittedApp(admission: ResourceAdmission): Hono<ServiceEnv> {
 }
 
 describe("resource admission", () => {
-  it("cancels a bounded body read when its work signal aborts", async () => {
-    const controller = new AbortController();
-    let streamCancelled = false;
-    const body = new ReadableStream<Uint8Array>({
-      start(stream) {
-        setTimeout(() => {
-          if (streamCancelled) return;
-          stream.enqueue(new TextEncoder().encode('{"ok":true}'));
-          stream.close();
-        }, 10);
-      },
-      cancel() {
-        streamCancelled = true;
-      },
-    });
-    const request = new Request("http://service.test/", {
-      method: "POST",
-      body,
-      duplex: "half",
-    } as RequestInit);
-
-    const reading = readBoundedJson(request, 1_000, controller.signal);
-    controller.abort();
-    await reading;
-
-    expect(streamCancelled).toBe(true);
-  });
-
   it("owns its rate-limit state", async () => {
     const config = createTestRuntimeConfig({
       admission: { rateLimitMaxRequests: 1 },

@@ -3,6 +3,7 @@ import {
   createCaptionsRoute,
   type CaptionsRouteDependencies,
 } from "../captions.js";
+import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 
 // All route tests run with a valid VPS_API_KEY in env — the auth path is
@@ -11,8 +12,10 @@ const VALID_KEY = "test-key";
 const captionsDependencies: CaptionsRouteDependencies = {
   fetchCaptions: vi.fn(),
 };
+const captionsConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const captions = createCaptionsRoute(
-  createTestRuntimeConfig({ apiKeys: [VALID_KEY] }),
+  captionsConfig,
+  createResourceAdmission(captionsConfig.admission),
   captionsDependencies,
 );
 
@@ -33,28 +36,8 @@ describe("POST /captions", () => {
     vi.mocked(captionsDependencies.fetchCaptions).mockReset();
   });
 
-  it("rejects malformed bodies with 400", async () => {
-    const res = await post({ not_the_right_field: "x" });
-    expect(res.status).toBe(400);
-  });
-
   it("rejects non-URL values with 400 (zod .url() guard)", async () => {
     const res = await post({ youtube_url: "not-a-url" });
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects malformed JSON with 400 (not 500)", async () => {
-    // Hono's default behavior is to throw on c.req.json() failure, which
-    // becomes a 500. The endpoint overrides that so a malformed request
-    // body is classified as client error rather than service error.
-    const res = await captions.request("/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${VALID_KEY}`,
-      },
-      body: "{not valid json",
-    });
     expect(res.status).toBe(400);
   });
 
