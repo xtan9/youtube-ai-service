@@ -57,9 +57,7 @@ export function createApp(
   );
   app.route(
     "/metadata",
-    createMetadataRoute(config, admission, {
-      videoInformationWorkflow: adapters.videoInformationWorkflow,
-    }),
+    createMetadataRoute(config, admission, adapters.videoInformationWorkflow),
   );
 
   return app;

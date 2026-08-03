@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createMetadataRoute,
-  type MetadataRouteDependencies,
-} from "../metadata.js";
+import { createMetadataRoute } from "../metadata.js";
 import type { VideoInformationWorkflow } from "../../lib/video-information-workflow.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
@@ -11,13 +8,10 @@ const VALID_KEY = "test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const metadataConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const videoInformationWorkflow = vi.fn<VideoInformationWorkflow>();
-const metadataDependencies: MetadataRouteDependencies = {
-  videoInformationWorkflow,
-};
 const metadata = createMetadataRoute(
   metadataConfig,
   createResourceAdmission(metadataConfig.admission),
-  metadataDependencies,
+  videoInformationWorkflow,
 );
 
 function post(body: unknown) {

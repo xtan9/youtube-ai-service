@@ -3,10 +3,7 @@ import {
   createCaptionsRoute,
   type CaptionsRouteDependencies,
 } from "../captions.js";
-import {
-  createMetadataRoute,
-  type MetadataRouteDependencies,
-} from "../metadata.js";
+import { createMetadataRoute } from "../metadata.js";
 import { createTranscribeRoute } from "../transcribe.js";
 import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
 import type { VideoInformationWorkflow } from "../../lib/video-information-workflow.js";
@@ -18,9 +15,7 @@ import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
 const VALID_KEY = "resource-limit-test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const workflowMock = vi.fn<TranscriptionWorkflow>();
-const metadataDependencies: MetadataRouteDependencies = {
-  videoInformationWorkflow: vi.fn<VideoInformationWorkflow>(),
-};
+const metadataWorkflow = vi.fn<VideoInformationWorkflow>();
 const captionsDependencies: CaptionsRouteDependencies = {
   fetchCaptions: vi.fn(),
 };
@@ -44,7 +39,7 @@ function createRoutes(
     metadata: createMetadataRoute(
       config,
       resourceAdmission,
-      metadataDependencies,
+      metadataWorkflow,
     ),
     transcribe: createTranscribeRoute(config, resourceAdmission, workflowMock),
   };
@@ -75,28 +70,23 @@ beforeEach(() => {
     ok: true,
     segments: [{ text: "ok", start: 0, duration: 1 }],
   });
-  vi.mocked(metadataDependencies.videoInformationWorkflow)
-    .mockReset()
-    .mockResolvedValue({
-      ok: true,
-      videoInformation: {
-        title: "Example",
-        description: "",
-        durationSeconds: 1,
-        languageHint: "en",
-        availableCaptionLanguages: [],
-      },
-    });
+  metadataWorkflow.mockReset().mockResolvedValue({
+    ok: true,
+    videoInformation: {
+      title: "Example",
+      description: "",
+      durationSeconds: 1,
+      languageHint: "en",
+      availableCaptionLanguages: [],
+    },
+  });
   vi.mocked(captionsDependencies.fetchCaptions).mockReset();
 });
 
 describe("transcription resource limits", () => {
   it("rejects an oversized JSON body before invoking the provider", async () => {
     const { metadata } = createRoutes({ requestBodyMaxBytes: 64 });
-    const provider = vi.spyOn(
-      metadataDependencies,
-      "videoInformationWorkflow",
-    );
+    const provider = metadataWorkflow;
 
     const response = await post(metadata, {
       youtube_url: VIDEO_URL,
