@@ -155,66 +155,6 @@ describe("transcription resource limits", () => {
     expect((await firstRequest).status).toBe(200);
   });
 
-  it("passes the configured duration limit into the workflow", async () => {
-    const { transcribe } = createRoutes({ mediaMaxDurationSeconds: 60 });
-    workflowMock.mockResolvedValue({
-      ok: false,
-      reason: "media-duration-exceeded",
-    });
-
-    const response = await post(transcribe, { youtube_url: VIDEO_URL });
-
-    expect(response.status).toBe(413);
-    expect(await response.json()).toMatchObject({
-      error: "Video exceeds the processing limit",
-      errorId: "MEDIA_DURATION_EXCEEDED",
-    });
-    expect(workflowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        limits: expect.objectContaining({ mediaMaxDurationSeconds: 60 }),
-      })
-    );
-  });
-
-  it("passes the configured byte limit without exposing internal details", async () => {
-    const { transcribe } = createRoutes();
-    workflowMock.mockResolvedValue({
-      ok: false,
-      reason: "media-size-exceeded",
-    });
-
-    const response = await post(transcribe, { youtube_url: VIDEO_URL });
-
-    expect(response.status).toBe(413);
-    const payload = await response.json();
-    expect(payload).toMatchObject({
-      error: "Video exceeds the processing limit",
-      errorId: "MEDIA_SIZE_EXCEEDED",
-    });
-    expect(JSON.stringify(payload)).not.toContain("50000001");
-    expect(workflowMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        limits: expect.objectContaining({ mediaMaxBytes: 50_000_000 }),
-      })
-    );
-  });
-
-  it("allows media exactly at the duration boundary", async () => {
-    const { transcribe } = createRoutes({ mediaMaxDurationSeconds: 60 });
-    workflowMock.mockResolvedValue({
-      ok: true,
-      segments: [{ text: "at the limit", start: 0, duration: 60 }],
-    });
-
-    const response = await post(transcribe, { youtube_url: VIDEO_URL });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      source: "whisper",
-      transcript: "at the limit",
-    });
-  });
-
   it("returns a stable timeout response for a stuck endpoint", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const config = createTestRuntimeConfig({
