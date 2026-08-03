@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   buildYtdlpMetadataArgs,
   createYtdlpMetadataFetcher,
+  YtdlpAcquisitionError,
 } from "../ytdlp-metadata.js";
 
 const mediaConfig = {
@@ -81,6 +82,20 @@ describe("fetchYtdlpMetadata", () => {
       }
     );
   };
+
+  it("forwards the metadata timeout and request signal to yt-dlp", async () => {
+    const signal = new AbortController().signal;
+    mockExecSuccess(JSON.stringify({ id: "abc" }));
+
+    await fetchYtdlpMetadata("https://youtu.be/abc", signal);
+
+    expect(mockedExecFile).toHaveBeenCalledWith(
+      "yt-dlp",
+      expect.any(Array),
+      expect.objectContaining({ timeout: 30_000, signal }),
+      expect.any(Function),
+    );
+  });
 
   it("returns parsed metadata on success", async () => {
     mockExecSuccess(
@@ -167,9 +182,15 @@ describe("fetchYtdlpMetadata", () => {
     // error, a persistent yt-dlp issue would be invisible except as a
     // rising cost-per-request.
     mockExecFailure(new Error("yt-dlp exit 1"), "ERROR: unavailable");
-    await expect(
-      fetchYtdlpMetadata("https://youtu.be/abc")
-    ).rejects.toThrow(/yt-dlp/);
+    const error = await fetchYtdlpMetadata("https://youtu.be/abc").then(
+      () => undefined,
+      (rejection: unknown) => rejection,
+    );
+    expect(error).toBeInstanceOf(YtdlpAcquisitionError);
+    expect(error).toMatchObject({
+      message: "yt-dlp metadata acquisition failed",
+    });
+    expect(String(error)).not.toContain("ERROR: unavailable");
   });
 
   it("throws when stdout isn't valid JSON", async () => {
@@ -177,9 +198,9 @@ describe("fetchYtdlpMetadata", () => {
     // defaults, matching the "no signal" case — hiding a real extraction
     // failure. Throw so the route can log + return 500.
     mockExecSuccess("not json at all");
-    await expect(
-      fetchYtdlpMetadata("https://youtu.be/abc")
-    ).rejects.toThrow();
+    await expect(fetchYtdlpMetadata("https://youtu.be/abc")).rejects.toBeInstanceOf(
+      YtdlpAcquisitionError,
+    );
   });
 
   it("throws when stdout parses but has no anchor fields (schema regression guard)", async () => {
@@ -188,16 +209,36 @@ describe("fetchYtdlpMetadata", () => {
     // return 200 and the orchestrator would pin an arbitrary language
     // to whisper. Catch the regression here at the boundary.
     mockExecSuccess(JSON.stringify({}));
-    await expect(
-      fetchYtdlpMetadata("https://youtu.be/abc")
-    ).rejects.toThrow(/anchor/);
+    await expect(fetchYtdlpMetadata("https://youtu.be/abc")).rejects.toBeInstanceOf(
+      YtdlpAcquisitionError,
+    );
   });
 
-  it("throws when stdout is a JSON array instead of object", async () => {
-    mockExecSuccess(JSON.stringify([]));
+  it.each([
+    ["null", null],
+    ["an array", []],
+    ["a string", "not an object"],
+  ])("classifies %s stdout payload as acquisition failure", async (_label, payload) => {
+    mockExecSuccess(JSON.stringify(payload));
+    await expect(fetchYtdlpMetadata("https://youtu.be/abc")).rejects.toBeInstanceOf(
+      YtdlpAcquisitionError,
+    );
+  });
+
+  it("does not classify request cancellation as provider acquisition failure", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("request stopped", "AbortError");
+    mockedExecFile.mockImplementation(
+      // @ts-expect-error execFile overloads don't narrow cleanly in mock
+      (_cmd, _args, _opts, cb) => {
+        controller.abort(reason);
+        cb?.(new Error("child process aborted"), "", "");
+      },
+    );
+
     await expect(
-      fetchYtdlpMetadata("https://youtu.be/abc")
-    ).rejects.toThrow(/non-object/);
+      fetchYtdlpMetadata("https://youtu.be/abc", controller.signal),
+    ).rejects.toBe(reason);
   });
 
   it("accepts a payload with `id` only (yt-dlp minimum)", async () => {
@@ -219,5 +260,40 @@ describe("fetchYtdlpMetadata", () => {
     );
     const result = await fetchYtdlpMetadata("https://youtu.be/abc");
     expect(result.description.length).toBe(2000);
+  });
+
+  it("normalizes caption dictionaries without trusting malformed provider entries", async () => {
+    mockExecSuccess(
+      JSON.stringify({
+        id: "abc",
+        subtitles: {
+          en: [
+            { url: "manual", ext: "vtt" },
+            null,
+            "not a track",
+            { url: 42, ext: null },
+            ["not", "a", "track"],
+          ],
+          ["__proto__"]: [{ url: "safe", ext: "vtt" }],
+          ignored: "not a track list",
+          empty: [],
+        },
+        automatic_captions: [],
+      }),
+    );
+
+    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+
+    expect(result.subtitles.en).toEqual([
+      { url: "manual", ext: "vtt" },
+      { url: "", ext: "" },
+    ]);
+    expect(
+      Object.prototype.hasOwnProperty.call(result.subtitles, "__proto__"),
+    ).toBe(true);
+    expect(result.subtitles["__proto__"]).toEqual([
+      { url: "safe", ext: "vtt" },
+    ]);
+    expect(result.automatic_captions).toEqual({});
   });
 });
