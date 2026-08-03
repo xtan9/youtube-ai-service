@@ -1,22 +1,64 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
+import { fetchCaptions } from "./lib/captions.js";
 import type { RuntimeConfig } from "./lib/runtime-config.js";
 import { createResourceAdmission } from "./lib/resource-limits.js";
 import type { ServiceEnv } from "./lib/request-id.js";
-import { createCaptionsRoute } from "./routes/captions.js";
+import {
+  createProductionTranscriptionWorkflow,
+  type TranscriptionWorkflow,
+} from "./lib/transcription-workflow.js";
+import { createYtdlpMetadataFetcher } from "./lib/ytdlp-metadata.js";
+import {
+  createCaptionsRoute,
+  type CaptionsRouteDependencies,
+} from "./routes/captions.js";
 import { health } from "./routes/health.js";
-import { createMetadataRoute } from "./routes/metadata.js";
+import {
+  createMetadataRoute,
+  type MetadataRouteDependencies,
+} from "./routes/metadata.js";
 import { createTranscribeRoute } from "./routes/transcribe.js";
 
-export function createApp(config: RuntimeConfig): Hono<ServiceEnv> {
+export interface AppAdapters {
+  fetchCaptions: CaptionsRouteDependencies["fetchCaptions"];
+  fetchMetadata: MetadataRouteDependencies["fetchMetadata"];
+  transcriptionWorkflow: TranscriptionWorkflow;
+}
+
+function createProductionAppAdapters(config: RuntimeConfig): AppAdapters {
+  return {
+    fetchCaptions,
+    fetchMetadata: createYtdlpMetadataFetcher(config.mediaAcquisition),
+    transcriptionWorkflow: createProductionTranscriptionWorkflow(config),
+  };
+}
+
+export function createApp(
+  config: RuntimeConfig,
+  adapters: AppAdapters = createProductionAppAdapters(config),
+): Hono<ServiceEnv> {
   const app = new Hono<ServiceEnv>();
   const admission = createResourceAdmission(config.admission);
 
   app.use("*", logger());
   app.route("/", health);
-  app.route("/transcribe", createTranscribeRoute(config, admission));
-  app.route("/captions", createCaptionsRoute(config, admission));
-  app.route("/metadata", createMetadataRoute(config, admission));
+  app.route(
+    "/transcribe",
+    createTranscribeRoute(config, admission, adapters.transcriptionWorkflow),
+  );
+  app.route(
+    "/captions",
+    createCaptionsRoute(config, admission, {
+      fetchCaptions: adapters.fetchCaptions,
+    }),
+  );
+  app.route(
+    "/metadata",
+    createMetadataRoute(config, admission, {
+      fetchMetadata: adapters.fetchMetadata,
+    }),
+  );
 
   return app;
 }

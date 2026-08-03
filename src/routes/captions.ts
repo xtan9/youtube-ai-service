@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { z } from "zod";
-import { fetchCaptions, extractVideoId } from "../lib/captions.js";
+import { extractVideoId, type CaptionResult } from "../lib/captions.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
@@ -20,13 +20,13 @@ export interface CaptionsRouteDependencies {
     lang: string | undefined,
     requestId: string,
     signal: AbortSignal,
-  ): ReturnType<typeof fetchCaptions>;
+  ): Promise<CaptionResult | null>;
 }
 
 export function createCaptionsRoute(
   config: CaptionsRouteConfig,
   admission: ResourceAdmission,
-  dependencies: CaptionsRouteDependencies = { fetchCaptions },
+  dependencies: CaptionsRouteDependencies,
 ): Hono<ServiceEnv> {
   const captions = createDataRoute("captions", config, admission);
 

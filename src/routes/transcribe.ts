@@ -4,11 +4,7 @@ import { extractVideoId } from "../lib/captions.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
-import {
-  createProductionTranscriptionWorkflow,
-  type TranscriptionWorkflow,
-} from "../lib/transcription-workflow.js";
-import type { RuntimeConfig } from "../lib/runtime-config.js";
+import type { TranscriptionWorkflow } from "../lib/transcription-workflow.js";
 import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
 import {
   createDataRoute,
@@ -16,15 +12,12 @@ import {
   type DataRouteConfig,
 } from "./data-route.js";
 
-type TranscribeRouteConfig = DataRouteConfig &
-  Pick<RuntimeConfig, "transcription" | "mediaAcquisition">;
+type TranscribeRouteConfig = DataRouteConfig;
 
 export function createTranscribeRoute(
   config: TranscribeRouteConfig,
   admission: ResourceAdmission,
-  workflow: TranscriptionWorkflow = createProductionTranscriptionWorkflow(
-    config,
-  ),
+  workflow: TranscriptionWorkflow,
 ): Hono<ServiceEnv> {
   const transcribe = createDataRoute("transcribe", config, admission);
 
