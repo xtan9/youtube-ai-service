@@ -1,7 +1,39 @@
 import { execFile } from "child_process";
 import { buildYtdlpCommonArgs } from "./ytdlp-common.js";
-import type { YtdlpMetadata } from "./language-detect.js";
 import type { MediaAcquisitionConfig } from "./runtime-config.js";
+
+export interface YtdlpCaptionTrack {
+  readonly url: string;
+  readonly ext: string;
+}
+
+// Keep the normalized provider contract with the acquisition adapter. The
+// language-analysis module consumes this data but does not own its schema.
+export interface YtdlpMetadata {
+  readonly title: string;
+  readonly description: string;
+  readonly language: string | null;
+  readonly duration: number | null;
+  readonly subtitles: Readonly<
+    Record<string, readonly YtdlpCaptionTrack[]>
+  >;
+  readonly automatic_captions: Readonly<
+    Record<string, readonly YtdlpCaptionTrack[]>
+  >;
+}
+
+/**
+ * Safe, expected failure at the yt-dlp acquisition boundary.
+ *
+ * The message intentionally contains no provider output. The original error
+ * remains available as `cause` for internal diagnostics.
+ */
+export class YtdlpAcquisitionError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("yt-dlp metadata acquisition failed", options);
+    this.name = "YtdlpAcquisitionError";
+  }
+}
 
 // Descriptions are unbounded user content. Truncate before returning so we
 // don't bloat JSON responses or log lines. 2000 chars is more than enough
@@ -34,9 +66,9 @@ export function buildYtdlpMetadataArgs(
 
 /**
  * Invoke yt-dlp to dump the video's metadata JSON, parse, and normalize.
- * Throws on non-zero exit or JSON parse failure — the caller's route
- * should classify this as 500 so a persistent yt-dlp regression is
- * visible rather than silently collapsing to "no language signal".
+ * Expected process, parse, and provider-schema failures become one safe
+ * YtdlpAcquisitionError. Abort reasons are rethrown unchanged so request
+ * cancellation cannot be mistaken for provider unavailability.
  */
 export function createYtdlpMetadataFetcher(config: MediaAcquisitionConfig) {
   return (url: string, signal?: AbortSignal) =>
@@ -50,35 +82,51 @@ async function fetchYtdlpMetadataWithConfig(
 ): Promise<YtdlpMetadata> {
   const args = buildYtdlpMetadataArgs(url, config);
 
-  const stdout = await new Promise<string>((resolve, reject) => {
-    execFile(
-      "yt-dlp",
-      args,
-      {
-        timeout: YTDLP_METADATA_TIMEOUT_MS,
-        maxBuffer: 20 * 1024 * 1024,
-        signal,
-      },
-      (error, out, stderr) => {
-        if (error) {
-          reject(new Error(`yt-dlp metadata failed: ${stderr || error.message}`));
-          return;
+  signal?.throwIfAborted();
+
+  let stdout: string;
+  try {
+    stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "yt-dlp",
+        args,
+        {
+          timeout: YTDLP_METADATA_TIMEOUT_MS,
+          maxBuffer: 20 * 1024 * 1024,
+          signal,
+        },
+        (error, out) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve(out);
         }
-        resolve(out);
-      }
-    );
-  });
+      );
+    });
+    signal?.throwIfAborted();
+  } catch (error) {
+    if (signal?.aborted) signal.throwIfAborted();
+    if (isAbortError(error)) throw error;
+    throw new YtdlpAcquisitionError({ cause: error });
+  }
 
   let raw: unknown;
   try {
     raw = JSON.parse(stdout);
   } catch (err) {
-    throw new Error(
-      `yt-dlp metadata returned invalid JSON: ${err instanceof Error ? err.message : String(err)}`
-    );
+    throw new YtdlpAcquisitionError({ cause: err });
   }
 
   return normalizeYtdlpJson(raw);
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === "AbortError" ||
+    ("code" in error && error.code === "ABORT_ERR")
+  );
 }
 
 
@@ -88,7 +136,7 @@ function normalizeYtdlpJson(raw: unknown): YtdlpMetadata {
   // safe defaults; type-unexpected values (e.g. `language: 42`) also
   // collapse, keeping the caller's contract simple.
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new Error("yt-dlp metadata returned a non-object payload");
+    throw new YtdlpAcquisitionError();
   }
   const obj = raw as Record<string, unknown>;
 
@@ -102,9 +150,7 @@ function normalizeYtdlpJson(raw: unknown): YtdlpMetadata {
     (k) => obj[k] !== undefined && obj[k] !== null
   );
   if (!hasAnchor) {
-    throw new Error(
-      "yt-dlp metadata payload is missing all anchor fields — likely a schema regression"
-    );
+    throw new YtdlpAcquisitionError();
   }
 
   const title = typeof obj.title === "string" ? obj.title : "";
@@ -143,19 +189,20 @@ function normalizeYtdlpJson(raw: unknown): YtdlpMetadata {
 function normalizeCaptionDict(
   raw: unknown
 ): Readonly<Record<string, readonly { url: string; ext: string }[]>> {
-  if (!raw || typeof raw !== "object") return {};
-  const result: Record<string, { url: string; ext: string }[]> = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const entries: [string, { url: string; ext: string }[]][] = [];
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     if (!Array.isArray(value)) continue;
     const tracks = value
       .filter(
-        (t): t is { url?: unknown; ext?: unknown } => t !== null && typeof t === "object"
+        (t): t is { url?: unknown; ext?: unknown } =>
+          t !== null && typeof t === "object" && !Array.isArray(t)
       )
       .map((t) => ({
         url: typeof t.url === "string" ? t.url : "",
         ext: typeof t.ext === "string" ? t.ext : "",
       }));
-    if (tracks.length > 0) result[key] = tracks;
+    if (tracks.length > 0) entries.push([key, tracks]);
   }
-  return result;
+  return Object.fromEntries(entries);
 }

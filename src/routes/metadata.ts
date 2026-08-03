@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import { z } from "zod";
-import type { YtdlpMetadata } from "../lib/language-detect.js";
+import type { YtdlpMetadata } from "../lib/ytdlp-metadata.js";
 import {
   detectLanguage,
   extractAvailableCaptions,

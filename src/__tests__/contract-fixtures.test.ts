@@ -4,7 +4,7 @@ import { createApp } from "../app.js";
 import type { CaptionsRouteDependencies } from "../routes/captions.js";
 import type { MetadataRouteDependencies } from "../routes/metadata.js";
 import type { CaptionResult, TranscriptSegment } from "../lib/captions.js";
-import type { YtdlpMetadata } from "../lib/language-detect.js";
+import type { YtdlpMetadata } from "../lib/ytdlp-metadata.js";
 import type { TranscriptionWorkflow } from "../lib/transcription-workflow.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
 

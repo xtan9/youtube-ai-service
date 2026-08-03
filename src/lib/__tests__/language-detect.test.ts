@@ -3,8 +3,8 @@ import {
   detectLanguage,
   normalizeLanguageCode,
   extractAvailableCaptions,
-  type YtdlpMetadata,
 } from "../language-detect.js";
+import type { YtdlpMetadata } from "../ytdlp-metadata.js";
 
 const base: YtdlpMetadata = {
   title: "",
