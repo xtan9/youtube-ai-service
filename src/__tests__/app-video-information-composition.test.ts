@@ -67,4 +67,49 @@ describe("production Video Information composition", () => {
     });
     expect(mockedExecFile).toHaveBeenCalledOnce();
   });
+
+  it("emits one safe acquisition failure diagnostic for the mapped unavailable outcome", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockedExecFile.mockImplementation(
+      // @ts-expect-error execFile overloads do not narrow cleanly in mocks
+      (_command, _args, _options, callback) => {
+        callback?.(
+          new Error("provider stderr and command output must remain private"),
+          "",
+          "provider details must remain private",
+        );
+      },
+    );
+
+    try {
+      const app = createApp(createTestRuntimeConfig({ apiKeys: [VALID_KEY] }));
+      const response = await metadataRequest(app);
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toMatchObject({
+        error: "Metadata fetch failed",
+        errorId: "METADATA_FAILED",
+      });
+
+      const failureLogs = errorSpy.mock.calls.filter(
+        ([event]) => event === "[metadata.failed]",
+      );
+      expect(failureLogs).toHaveLength(1);
+      expect(failureLogs[0]?.[1]).toEqual(
+        expect.objectContaining({
+          errorId: "METADATA_FAILED",
+          requestId: expect.any(String),
+          videoId: "dQw4w9WgXcQ",
+          errorName: "YtdlpAcquisitionError",
+          stage: "acquisition",
+        }),
+      );
+      const logText = JSON.stringify(failureLogs);
+      expect(logText).not.toContain("provider stderr");
+      expect(logText).not.toContain("provider details");
+      expect(logText).not.toContain("command output");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
 });
