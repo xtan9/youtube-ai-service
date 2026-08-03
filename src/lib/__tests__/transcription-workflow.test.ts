@@ -1,21 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createTranscriptionWorkflow,
+  createTranscriptionWorkflow as createWorkflowWithPolicy,
   type TranscriptionWorkflowDependencies,
   type TranscriptionWorkflowInput,
+  type TranscriptionWorkflowLimits,
 } from "../transcription-workflow.js";
 import { AudioDownloadError, AudioMediaLimitError } from "../ytdlp.js";
 import { GroqTranscribeError } from "../groq-transcribe.js";
 import { LocalTranscriptionError } from "../whisper.js";
 
+const LIMITS: TranscriptionWorkflowLimits = {
+  mediaMaxBytes: 50_000_000,
+  mediaMaxDurationSeconds: 1_800,
+};
+
 const INPUT: TranscriptionWorkflowInput = {
   youtubeUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   language: undefined,
   signal: new AbortController().signal,
-  limits: {
-    mediaMaxBytes: 50_000_000,
-    mediaMaxDurationSeconds: 1_800,
-  },
   correlation: {
     requestId: "workflow-request-id",
     videoId: "dQw4w9WgXcQ",
@@ -39,6 +41,13 @@ function dependencies(
     logEvent: vi.fn(),
     ...overrides,
   };
+}
+
+function createTranscriptionWorkflow(
+  workflowDependencies: TranscriptionWorkflowDependencies,
+  limits: TranscriptionWorkflowLimits = LIMITS,
+) {
+  return createWorkflowWithPolicy(workflowDependencies, limits);
 }
 
 describe("transcription workflow", () => {
@@ -68,7 +77,7 @@ describe("transcription workflow", () => {
         [
           INPUT.youtubeUrl,
           "/tmp/audio.mp3",
-          INPUT.limits.mediaMaxBytes,
+          LIMITS.mediaMaxBytes,
           INPUT.signal,
         ],
       ],
@@ -92,11 +101,15 @@ describe("transcription workflow", () => {
     });
   });
 
-  it("classifies media beyond the processing duration limit", async () => {
+  it("uses the duration policy supplied when the workflow is constructed", async () => {
     const run = createTranscriptionWorkflow(
       dependencies({
-        probeAudioDurationSeconds: vi.fn().mockResolvedValue(1_800.1),
-      })
+        probeAudioDurationSeconds: vi.fn().mockResolvedValue(61),
+      }),
+      {
+        mediaMaxBytes: 50_000_000,
+        mediaMaxDurationSeconds: 60,
+      },
     );
 
     const outcome = await run(INPUT);

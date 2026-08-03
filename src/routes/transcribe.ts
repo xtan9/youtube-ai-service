@@ -34,17 +34,12 @@ export function createTranscribeRoute(
 
     const { youtube_url: youtubeUrl, lang } = intake.data;
     const videoId = extractVideoId(youtubeUrl) ?? "unknown";
-    const limits = c.get("resourceLimits");
 
     try {
       const outcome = await workflow({
         youtubeUrl,
         language: lang,
         signal: c.get("workSignal"),
-        limits: {
-          mediaMaxBytes: limits.mediaMaxBytes,
-          mediaMaxDurationSeconds: limits.mediaMaxDurationSeconds,
-        },
         correlation: {
           requestId: c.get("requestId"),
           videoId,

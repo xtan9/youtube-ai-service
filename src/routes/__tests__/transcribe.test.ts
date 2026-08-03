@@ -50,7 +50,7 @@ describe("POST /transcribe HTTP boundary", () => {
     }
   );
 
-  it("passes validated input, limits, and correlation to the workflow", async () => {
+  it("passes only request-specific input and correlation to the workflow", async () => {
     await post(
       { youtube_url: VIDEO_URL, lang: "fr" },
       { "X-Request-ID": "workflow-request-id" }
@@ -60,10 +60,6 @@ describe("POST /transcribe HTTP boundary", () => {
       {
         youtubeUrl: VIDEO_URL,
         language: "fr",
-        limits: {
-          mediaMaxBytes: 50_000_000,
-          mediaMaxDurationSeconds: 1_800,
-        },
         correlation: {
           requestId: "workflow-request-id",
           videoId: "dQw4w9WgXcQ",

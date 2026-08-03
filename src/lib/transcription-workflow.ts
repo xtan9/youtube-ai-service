@@ -34,14 +34,15 @@ export interface TranscriptionWorkflowInput {
   youtubeUrl: string;
   language?: string;
   signal: AbortSignal;
-  limits: {
-    mediaMaxBytes: number;
-    mediaMaxDurationSeconds: number;
-  };
   correlation: {
     requestId: string;
     videoId: string;
   };
+}
+
+export interface TranscriptionWorkflowLimits {
+  readonly mediaMaxBytes: number;
+  readonly mediaMaxDurationSeconds: number;
 }
 
 export type TranscriptionWorkflowOutcome =
@@ -97,7 +98,8 @@ export type TranscriptionWorkflow = (
 ) => Promise<TranscriptionWorkflowOutcome>;
 
 export function createTranscriptionWorkflow(
-  dependencies: TranscriptionWorkflowDependencies
+  dependencies: TranscriptionWorkflowDependencies,
+  limits: TranscriptionWorkflowLimits,
 ): TranscriptionWorkflow {
   let groqKeyMissingWarned = false;
 
@@ -115,7 +117,7 @@ export function createTranscriptionWorkflow(
         await dependencies.downloadAudio(
           input.youtubeUrl,
           audioPath,
-          input.limits.mediaMaxBytes,
+          limits.mediaMaxBytes,
           input.signal,
         );
         dependencies.logEvent("info", "transcribe.audio_downloaded", {
@@ -138,7 +140,7 @@ export function createTranscriptionWorkflow(
           );
           return { ok: false, reason: "media-duration-unknown" };
         }
-        if (audioSeconds > input.limits.mediaMaxDurationSeconds) {
+        if (audioSeconds > limits.mediaMaxDurationSeconds) {
           dependencies.logEvent(
             "info",
             "transcribe.MEDIA_DURATION_EXCEEDED",
@@ -277,7 +279,12 @@ export function createTranscriptionWorkflow(
 type ProductionWorkflowConfig = Pick<
   RuntimeConfig,
   "transcription" | "mediaAcquisition"
->;
+> & {
+  readonly admission: Pick<
+    RuntimeConfig["admission"],
+    "mediaMaxBytes" | "mediaMaxDurationSeconds"
+  >;
+};
 
 export function createProductionTranscriptionWorkflow(
   config: ProductionWorkflowConfig
@@ -289,16 +296,22 @@ export function createProductionTranscriptionWorkflow(
         throw new Error("Groq transcription is not configured");
       };
 
-  return createTranscriptionWorkflow({
-    createAudioPath,
-    downloadAudio: createAudioDownloader(config.mediaAcquisition),
-    cleanupAudio,
-    probeAudioDurationSeconds,
-    transcribeViaGroq,
-    transcribeLocally: transcribeAudio,
-    isGroqConfigured: () => groqConfig !== null,
-    readLocalFallbackMaxSeconds: () =>
-      config.transcription.localFallbackMaxSeconds,
-    logEvent: logServiceEvent,
-  });
+  return createTranscriptionWorkflow(
+    {
+      createAudioPath,
+      downloadAudio: createAudioDownloader(config.mediaAcquisition),
+      cleanupAudio,
+      probeAudioDurationSeconds,
+      transcribeViaGroq,
+      transcribeLocally: transcribeAudio,
+      isGroqConfigured: () => groqConfig !== null,
+      readLocalFallbackMaxSeconds: () =>
+        config.transcription.localFallbackMaxSeconds,
+      logEvent: logServiceEvent,
+    },
+    {
+      mediaMaxBytes: config.admission.mediaMaxBytes,
+      mediaMaxDurationSeconds: config.admission.mediaMaxDurationSeconds,
+    },
+  );
 }
