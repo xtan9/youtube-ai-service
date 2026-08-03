@@ -10,6 +10,23 @@ import {
   type YtdlpMetadata,
 } from "./ytdlp-metadata.js";
 
+const MAX_DIAGNOSTIC_COUNT = 1_000;
+const MAX_DIAGNOSTIC_TEXT_LENGTH = 4_000;
+const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+
+function boundDiagnosticMeasurement(value: number, maximum: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(0, Math.trunc(value)), maximum);
+}
+
+function safeErrorName(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown";
+  const name = error.name;
+  return typeof name === "string" && SAFE_ERROR_NAME_PATTERN.test(name)
+    ? name
+    : "unknown";
+}
+
 export interface VideoInformationWorkflowInput {
   readonly youtubeUrl: string;
   readonly signal: AbortSignal;
@@ -60,7 +77,10 @@ export function createVideoInformationWorkflow(
 ): VideoInformationWorkflow {
   return async (input) => {
     input.signal.throwIfAborted();
-    const { correlation } = input;
+    const correlation = {
+      requestId: input.correlation.requestId,
+      videoId: input.correlation.videoId,
+    };
 
     dependencies.logEvent("info", "metadata.fetch", {
       ...correlation,
@@ -74,19 +94,30 @@ export function createVideoInformationWorkflow(
       input.signal.throwIfAborted();
 
       const detectedLanguage = dependencies.detectLanguage(metadata);
+      input.signal.throwIfAborted();
       let languageHint = detectedLanguage;
       if (!languageHint) {
         dependencies.logEvent("warn", "metadata.LANGUAGE_DETECT_FALLBACK", {
           errorId: "LANGUAGE_DETECT_FALLBACK",
           ...correlation,
           hasLanguageField: Boolean(metadata.language),
-          subtitleKeyCount: Object.keys(metadata.subtitles).length,
-          textLength:
-            (metadata.title?.length ?? 0) +
-            (metadata.description?.length ?? 0),
+          subtitleKeyCount: boundDiagnosticMeasurement(
+            Object.keys(metadata.subtitles).length,
+            MAX_DIAGNOSTIC_COUNT,
+          ),
+          textLength: boundDiagnosticMeasurement(
+            metadata.title.length + metadata.description.length,
+            MAX_DIAGNOSTIC_TEXT_LENGTH,
+          ),
         });
+        input.signal.throwIfAborted();
         languageHint = "en";
       }
+
+      const availableCaptionLanguages = [
+        ...dependencies.extractAvailableCaptions(metadata),
+      ];
+      input.signal.throwIfAborted();
 
       return {
         ok: true,
@@ -95,9 +126,7 @@ export function createVideoInformationWorkflow(
           description: metadata.description,
           durationSeconds: metadata.duration,
           languageHint,
-          availableCaptionLanguages: [
-            ...dependencies.extractAvailableCaptions(metadata),
-          ],
+          availableCaptionLanguages,
         },
       };
     } catch (error) {
@@ -107,7 +136,7 @@ export function createVideoInformationWorkflow(
         dependencies.logEvent("error", "metadata.failed", {
           errorId: "METADATA_FAILED",
           ...correlation,
-          errorName: error.name,
+          errorName: safeErrorName(error),
           stage: "acquisition",
         });
         return { ok: false, reason: "temporarily-unavailable" };
@@ -116,7 +145,7 @@ export function createVideoInformationWorkflow(
       dependencies.logEvent("error", "metadata.WORKFLOW_UNHANDLED", {
         errorId: "METADATA_WORKFLOW_UNHANDLED",
         ...correlation,
-        errorName: error instanceof Error ? error.name : "unknown",
+        errorName: safeErrorName(error),
       });
       throw error;
     }
