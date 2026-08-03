@@ -3,16 +3,47 @@ import {
   createTranscriptionWorkflow as createWorkflowWithPolicy,
   type TranscriptionWorkflowDependencies,
   type TranscriptionWorkflowInput,
-  type TranscriptionWorkflowLimits,
+  type TranscriptionWorkflowPolicy,
 } from "../transcription-workflow.js";
 import { AudioDownloadError, AudioMediaLimitError } from "../ytdlp.js";
 import { GroqTranscribeError } from "../groq-transcribe.js";
 import { LocalTranscriptionError } from "../whisper.js";
 
-const LIMITS: TranscriptionWorkflowLimits = {
+const LOCAL_ONLY_POLICY: Extract<
+  TranscriptionWorkflowPolicy,
+  { backend: "local-only" }
+> = {
+  backend: "local-only",
   mediaMaxBytes: 50_000_000,
   mediaMaxDurationSeconds: 1_800,
 };
+
+function localOnlyPolicy(
+  overrides: Partial<Omit<typeof LOCAL_ONLY_POLICY, "backend">> = {},
+): typeof LOCAL_ONLY_POLICY {
+  return { ...LOCAL_ONLY_POLICY, ...overrides };
+}
+
+type GroqFirstPolicy = Extract<
+  TranscriptionWorkflowPolicy,
+  { backend: "groq-first" }
+>;
+
+function groqFirstPolicy(
+  overrides: Partial<Omit<GroqFirstPolicy, "backend">> = {},
+): GroqFirstPolicy {
+  return {
+    backend: "groq-first",
+    mediaMaxBytes: 50_000_000,
+    mediaMaxDurationSeconds: 1_800,
+    localFallbackMaxSeconds: 180,
+    transcribeViaGroq: vi.fn().mockResolvedValue({
+      segments: [{ text: "groq result", start: 0, duration: 1 }],
+      language: "en",
+    }),
+    ...overrides,
+  };
+}
 
 const INPUT: TranscriptionWorkflowInput = {
   youtubeUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -32,12 +63,9 @@ function dependencies(
     downloadAudio: vi.fn().mockResolvedValue(undefined),
     cleanupAudio: vi.fn().mockResolvedValue(undefined),
     probeAudioDurationSeconds: vi.fn().mockResolvedValue(60),
-    transcribeViaGroq: vi.fn(),
     transcribeLocally: vi
       .fn()
       .mockResolvedValue([{ text: "hello", start: 0, duration: 1 }]),
-    isGroqConfigured: vi.fn().mockReturnValue(false),
-    readLocalFallbackMaxSeconds: vi.fn().mockReturnValue(180),
     logEvent: vi.fn(),
     ...overrides,
   };
@@ -45,9 +73,9 @@ function dependencies(
 
 function createTranscriptionWorkflow(
   workflowDependencies: TranscriptionWorkflowDependencies,
-  limits: TranscriptionWorkflowLimits = LIMITS,
+  policy: TranscriptionWorkflowPolicy = LOCAL_ONLY_POLICY,
 ) {
-  return createWorkflowWithPolicy(workflowDependencies, limits);
+  return createWorkflowWithPolicy(workflowDependencies, policy);
 }
 
 describe("transcription workflow", () => {
@@ -59,6 +87,29 @@ describe("transcription workflow", () => {
     expect(outcome).toEqual({
       ok: true,
       segments: [{ text: "hello", start: 0, duration: 1 }],
+    });
+  });
+
+  it("does not apply the Groq fallback cap to primary local transcription", async () => {
+    const transcribeLocally = vi
+      .fn()
+      .mockResolvedValue([{ text: "long local result", start: 0, duration: 1 }]);
+    const run = createTranscriptionWorkflow(
+      dependencies({
+        probeAudioDurationSeconds: vi.fn().mockResolvedValue(181),
+        transcribeLocally,
+      }),
+      localOnlyPolicy({ mediaMaxDurationSeconds: 1_800 }),
+    );
+
+    const outcome = await run(INPUT);
+
+    expect({ outcome, localCalls: transcribeLocally.mock.calls }).toEqual({
+      outcome: {
+        ok: true,
+        segments: [{ text: "long local result", start: 0, duration: 1 }],
+      },
+      localCalls: [["/tmp/audio.mp3", undefined, INPUT.signal]],
     });
   });
 
@@ -77,7 +128,7 @@ describe("transcription workflow", () => {
         [
           INPUT.youtubeUrl,
           "/tmp/audio.mp3",
-          LIMITS.mediaMaxBytes,
+          LOCAL_ONLY_POLICY.mediaMaxBytes,
           INPUT.signal,
         ],
       ],
@@ -106,10 +157,7 @@ describe("transcription workflow", () => {
       dependencies({
         probeAudioDurationSeconds: vi.fn().mockResolvedValue(61),
       }),
-      {
-        mediaMaxBytes: 50_000_000,
-        mediaMaxDurationSeconds: 60,
-      },
+      localOnlyPolicy({ mediaMaxDurationSeconds: 60 }),
     );
 
     const outcome = await run(INPUT);
@@ -191,12 +239,13 @@ describe("transcription workflow", () => {
   it("completes a transcription with the configured Groq backend", async () => {
     const run = createTranscriptionWorkflow(
       dependencies({
-        isGroqConfigured: vi.fn().mockReturnValue(true),
+      }),
+      groqFirstPolicy({
         transcribeViaGroq: vi.fn().mockResolvedValue({
           segments: [{ text: "groq result", start: 0, duration: 1 }],
           language: "en",
         }),
-      })
+      }),
     );
 
     const outcome = await run(INPUT);
@@ -209,12 +258,12 @@ describe("transcription workflow", () => {
 
   it("completes a short transcription locally after an eligible Groq failure", async () => {
     const run = createTranscriptionWorkflow(
-      dependencies({
-        isGroqConfigured: vi.fn().mockReturnValue(true),
+      dependencies(),
+      groqFirstPolicy({
         transcribeViaGroq: vi
           .fn()
           .mockRejectedValue(new GroqTranscribeError(500, "upstream failure")),
-      })
+      }),
     );
 
     const outcome = await run(INPUT);
@@ -225,19 +274,48 @@ describe("transcription workflow", () => {
     });
   });
 
+  it("keeps media exactly at the fallback cap eligible", async () => {
+    const transcribeLocally = vi
+      .fn()
+      .mockResolvedValue([{ text: "boundary result", start: 0, duration: 1 }]);
+    const run = createTranscriptionWorkflow(
+      dependencies({
+        probeAudioDurationSeconds: vi.fn().mockResolvedValue(180),
+        transcribeLocally,
+      }),
+      groqFirstPolicy({
+        localFallbackMaxSeconds: 180,
+        transcribeViaGroq: vi
+          .fn()
+          .mockRejectedValue(new GroqTranscribeError("network", "reset")),
+      }),
+    );
+
+    const outcome = await run(INPUT);
+
+    expect({ outcome, localCalls: transcribeLocally.mock.calls }).toEqual({
+      outcome: {
+        ok: true,
+        segments: [{ text: "boundary result", start: 0, duration: 1 }],
+      },
+      localCalls: [["/tmp/audio.mp3", undefined, INPUT.signal]],
+    });
+  });
+
   it("does not use the local backend above the fallback cap", async () => {
     const transcribeLocally = vi.fn();
     const cleanupAudio = vi.fn().mockResolvedValue(undefined);
     const run = createTranscriptionWorkflow(
       dependencies({
-        isGroqConfigured: vi.fn().mockReturnValue(true),
         probeAudioDurationSeconds: vi.fn().mockResolvedValue(181),
+        transcribeLocally,
+        cleanupAudio,
+      }),
+      groqFirstPolicy({
         transcribeViaGroq: vi
           .fn()
           .mockRejectedValue(new GroqTranscribeError("network", "reset")),
-        transcribeLocally,
-        cleanupAudio,
-      })
+      }),
     );
 
     const outcome = await run(INPUT);
@@ -259,7 +337,9 @@ describe("transcription workflow", () => {
       .mockResolvedValue([{ text: "local result", start: 0, duration: 1 }]);
     const run = createTranscriptionWorkflow(
       dependencies({
-        isGroqConfigured: vi.fn().mockReturnValue(true),
+        transcribeLocally,
+      }),
+      groqFirstPolicy({
         transcribeViaGroq: vi.fn().mockRejectedValue(
           new GroqTranscribeError(
             "compress",
@@ -267,8 +347,7 @@ describe("transcription workflow", () => {
             "ffmpeg-failed"
           )
         ),
-        transcribeLocally,
-      })
+      }),
     );
 
     const outcome = await run(INPUT);
@@ -284,12 +363,12 @@ describe("transcription workflow", () => {
 
   it("classifies Groq quota exhaustion as temporarily unavailable", async () => {
     const run = createTranscriptionWorkflow(
-      dependencies({
-        isGroqConfigured: vi.fn().mockReturnValue(true),
+      dependencies(),
+      groqFirstPolicy({
         transcribeViaGroq: vi
           .fn()
           .mockRejectedValue(new GroqTranscribeError(429, "rate limited")),
-      })
+      }),
     );
 
     const outcome = await run(INPUT);
@@ -304,8 +383,8 @@ describe("transcription workflow", () => {
     "classifies operational compression failure %s as temporarily unavailable",
     async (compressKind) => {
       const run = createTranscriptionWorkflow(
-        dependencies({
-          isGroqConfigured: vi.fn().mockReturnValue(true),
+        dependencies(),
+        groqFirstPolicy({
           transcribeViaGroq: vi.fn().mockRejectedValue(
             new GroqTranscribeError(
               "compress",
@@ -313,7 +392,7 @@ describe("transcription workflow", () => {
               compressKind
             )
           ),
-        })
+        }),
       );
 
       const outcome = await run(INPUT);
@@ -393,6 +472,46 @@ describe("transcription workflow", () => {
         },
       },
     ]);
+  });
+
+  it("emits the missing-Groq event once per constructed local-only workflow", async () => {
+    const logEvent = vi.fn();
+    const transcribeLocally = vi
+      .fn()
+      .mockResolvedValue([{ text: "hello", start: 0, duration: 1 }]);
+    const run = createTranscriptionWorkflow(
+      dependencies({ transcribeLocally, logEvent }),
+    );
+    const secondInput: TranscriptionWorkflowInput = {
+      ...INPUT,
+      correlation: {
+        requestId: "second-workflow-request-id",
+        videoId: INPUT.correlation.videoId,
+      },
+    };
+
+    await run(INPUT);
+    await run(secondInput);
+
+    expect({
+      localCalls: transcribeLocally.mock.calls.length,
+      missingGroqEvents: logEvent.mock.calls.filter(
+        ([, event]) => event === "transcribe.GROQ_API_KEY_MISSING",
+      ),
+    }).toEqual({
+      localCalls: 2,
+      missingGroqEvents: [
+        [
+          "error",
+          "transcribe.GROQ_API_KEY_MISSING",
+          {
+            errorId: "GROQ_API_KEY_MISSING",
+            requestId: "workflow-request-id",
+            videoId: "dQw4w9WgXcQ",
+          },
+        ],
+      ],
+    });
   });
 
   it("preserves the primary outcome when downloaded-media cleanup fails", async () => {
@@ -520,12 +639,13 @@ describe("transcription workflow", () => {
     const logEvent = vi.fn();
     const run = createTranscriptionWorkflow(
       dependencies({
-        isGroqConfigured: vi.fn().mockReturnValue(true),
+        logEvent,
+      }),
+      groqFirstPolicy({
         transcribeViaGroq: vi
           .fn()
           .mockRejectedValue(new GroqTranscribeError(500, "upstream failure")),
-        logEvent,
-      })
+      }),
     );
 
     await run(INPUT);
@@ -548,12 +668,13 @@ describe("transcription workflow", () => {
     const logEvent = vi.fn();
     const run = createTranscriptionWorkflow(
       dependencies({
-        isGroqConfigured: vi.fn().mockReturnValue(true),
+        logEvent,
+      }),
+      groqFirstPolicy({
         transcribeViaGroq: vi
           .fn()
           .mockRejectedValue(new GroqTranscribeError(429, "rate limited")),
-        logEvent,
-      })
+      }),
     );
 
     await run(INPUT);

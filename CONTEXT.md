@@ -15,3 +15,7 @@ _Avoid_: Captions, caption extraction
 **Transcript Segment**:
 A bounded piece of transcribed text paired with its start time and duration.
 _Avoid_: Caption, paragraph
+
+**Local Transcription Fallback**:
+A bounded local second attempt after an eligible primary Transcription failure.
+_Avoid_: Caption Track fallback, language fallback
