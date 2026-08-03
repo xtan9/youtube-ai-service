@@ -16,8 +16,16 @@ import {
   createYtdlpMetadata,
   languageTag,
 } from "../../test-support/language-metadata.js";
+import {
+  parseYouTubeVideoReference,
+  type YouTubeVideoReference,
+} from "../youtube-url.js";
 
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+const VIDEO_REFERENCE = parseYouTubeVideoReference(VIDEO_URL);
+if (!VIDEO_REFERENCE) {
+  throw new Error("Test fixture must be a recognized YouTube video URL");
+}
 const CORRELATION = {
   requestId: "workflow-request-id",
   videoId: "dQw4w9WgXcQ",
@@ -56,7 +64,7 @@ describe("video information workflow", () => {
     const workflow = createVideoInformationWorkflow(dependencies);
 
     const result = await workflow({
-      youtubeUrl: VIDEO_URL,
+      videoReference: VIDEO_REFERENCE,
       signal: new AbortController().signal,
       correlation: CORRELATION,
     });
@@ -75,7 +83,7 @@ describe("video information workflow", () => {
     expect(result.ok && result.videoInformation).not.toHaveProperty("language");
     expect(result.ok && result.videoInformation).not.toHaveProperty("subtitles");
     expect(dependencies.fetchMetadata).toHaveBeenCalledWith(
-      VIDEO_URL,
+      VIDEO_REFERENCE,
       expect.any(AbortSignal),
     );
     expect(dependencies.logEvent).toHaveBeenCalledWith(
@@ -91,7 +99,7 @@ describe("video information workflow", () => {
     const workflow = createVideoInformationWorkflow(dependencies);
 
     const result = await workflow({
-      youtubeUrl: VIDEO_URL,
+      videoReference: VIDEO_REFERENCE,
       signal: new AbortController().signal,
       correlation: CORRELATION,
     });
@@ -135,7 +143,7 @@ describe("video information workflow", () => {
     const workflow = createVideoInformationWorkflow(dependencies);
 
     const result = await workflow({
-      youtubeUrl: VIDEO_URL,
+      videoReference: VIDEO_REFERENCE,
       signal: new AbortController().signal,
       correlation: CORRELATION,
     });
@@ -186,7 +194,7 @@ describe("video information workflow", () => {
     const workflow = createVideoInformationWorkflow(dependencies);
 
     await workflow({
-      youtubeUrl: VIDEO_URL,
+      videoReference: VIDEO_REFERENCE,
       signal: new AbortController().signal,
       correlation: CORRELATION,
     });
@@ -215,7 +223,7 @@ describe("video information workflow", () => {
     const workflow = createVideoInformationWorkflow(dependencies);
 
     const result = await workflow({
-      youtubeUrl: VIDEO_URL,
+      videoReference: VIDEO_REFERENCE,
       signal: new AbortController().signal,
       correlation: CORRELATION,
     });
@@ -243,7 +251,7 @@ describe("video information workflow", () => {
     const workflow = createVideoInformationWorkflow(dependencies);
 
     const result = await workflow({
-      youtubeUrl: VIDEO_URL,
+      videoReference: VIDEO_REFERENCE,
       signal: new AbortController().signal,
       correlation: CORRELATION,
     });
@@ -284,7 +292,7 @@ describe("video information workflow", () => {
 
     await expect(
       workflow({
-        youtubeUrl: VIDEO_URL,
+        videoReference: VIDEO_REFERENCE,
         signal: new AbortController().signal,
         correlation: hostileCorrelation,
       }),
@@ -323,7 +331,7 @@ describe("video information workflow", () => {
 
     await expect(
       workflow({
-        youtubeUrl: VIDEO_URL,
+        videoReference: VIDEO_REFERENCE,
         signal: controller.signal,
         correlation: CORRELATION,
       }),
@@ -339,18 +347,20 @@ describe("video information workflow", () => {
     const cancellation = new DOMException("request stopped", "AbortError");
     const controller = new AbortController();
     const logEvent = vi.fn();
-    const fetchMetadata = vi.fn(async (_url: string, signal: AbortSignal) => {
-      controller.abort(cancellation);
-      signal.throwIfAborted();
-      throw new Error("unreachable");
-    });
+    const fetchMetadata = vi.fn(
+      async (_videoReference: YouTubeVideoReference, signal: AbortSignal) => {
+        controller.abort(cancellation);
+        signal.throwIfAborted();
+        throw new Error("unreachable");
+      },
+    );
     const workflow = createVideoInformationWorkflow(
       createDependencies(baseMetadata, { fetchMetadata, logEvent }),
     );
 
     await expect(
       workflow({
-        youtubeUrl: VIDEO_URL,
+        videoReference: VIDEO_REFERENCE,
         signal: controller.signal,
         correlation: CORRELATION,
       }),
@@ -377,7 +387,7 @@ describe("video information workflow", () => {
 
     await expect(
       workflow({
-        youtubeUrl: VIDEO_URL,
+        videoReference: VIDEO_REFERENCE,
         signal: controller.signal,
         correlation: CORRELATION,
       }),
@@ -395,7 +405,7 @@ describe("video information workflow", () => {
 
     await expect(
       defectiveWorkflow({
-        youtubeUrl: VIDEO_URL,
+        videoReference: VIDEO_REFERENCE,
         signal: new AbortController().signal,
         correlation: CORRELATION,
       }),

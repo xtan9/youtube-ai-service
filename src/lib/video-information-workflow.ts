@@ -9,6 +9,7 @@ import {
 } from "./language-tag.js";
 import { logServiceEvent } from "./observability.js";
 import type { RuntimeConfig } from "./runtime-config.js";
+import type { YouTubeVideoReference } from "./youtube-url.js";
 import {
   createYtdlpMetadataFetcher,
   YtdlpAcquisitionError,
@@ -43,7 +44,7 @@ function safeErrorName(error: unknown): string {
 }
 
 export interface VideoInformationWorkflowInput {
-  readonly youtubeUrl: string;
+  readonly videoReference: YouTubeVideoReference;
   readonly signal: AbortSignal;
   readonly correlation: {
     readonly requestId: string;
@@ -75,7 +76,7 @@ export type VideoInformationWorkflow = (
 
 export interface VideoInformationWorkflowDependencies {
   readonly fetchMetadata: (
-    url: string,
+    videoReference: YouTubeVideoReference,
     signal: AbortSignal,
   ) => Promise<YtdlpMetadata>;
   readonly detectLanguage: (metadata: YtdlpMetadata) => LanguageTag | null;
@@ -96,7 +97,7 @@ export function createVideoInformationWorkflow(
     input.signal.throwIfAborted();
     const correlation = {
       requestId: input.correlation.requestId,
-      videoId: input.correlation.videoId,
+      videoId: input.videoReference.videoId,
     };
 
     dependencies.logEvent("info", "metadata.fetch", {
@@ -105,7 +106,7 @@ export function createVideoInformationWorkflow(
 
     try {
       const metadata = await dependencies.fetchMetadata(
-        input.youtubeUrl,
+        input.videoReference,
         input.signal,
       );
       input.signal.throwIfAborted();

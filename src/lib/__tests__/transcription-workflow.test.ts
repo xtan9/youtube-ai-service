@@ -9,6 +9,7 @@ import { AudioDownloadError, AudioMediaLimitError } from "../ytdlp.js";
 import { GroqTranscribeError } from "../groq-transcribe.js";
 import { LocalTranscriptionError } from "../whisper.js";
 import { primaryLanguageCode as primary } from "../../test-support/language-tag.js";
+import { parseYouTubeVideoReference } from "../youtube-url.js";
 
 const LOCAL_ONLY_POLICY: Extract<
   TranscriptionWorkflowPolicy,
@@ -46,8 +47,13 @@ function groqFirstPolicy(
   };
 }
 
+const VIDEO_REFERENCE = parseYouTubeVideoReference(
+  "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
+
 const INPUT: TranscriptionWorkflowInput = {
-  youtubeUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  videoReference: VIDEO_REFERENCE,
   language: undefined,
   signal: new AbortController().signal,
   correlation: {
@@ -165,7 +171,7 @@ describe("transcription workflow", () => {
     }).toEqual({
       download: [
         [
-          INPUT.youtubeUrl,
+          INPUT.videoReference,
           "/tmp/audio.mp3",
           LOCAL_ONLY_POLICY.mediaMaxBytes,
           INPUT.signal,

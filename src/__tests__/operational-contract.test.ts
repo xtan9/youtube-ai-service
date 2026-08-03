@@ -13,6 +13,7 @@ import { logServiceEvent } from "../lib/observability.js";
 import type { YtdlpMetadata } from "../lib/ytdlp-metadata.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
 import { createYtdlpMetadata, languageTag } from "../test-support/language-metadata.js";
+import type { YouTubeVideoReference } from "../lib/youtube-url.js";
 
 const CURRENT_KEY = "current-key";
 const PREVIOUS_KEY = "previous-key";
@@ -20,7 +21,10 @@ const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const REQUEST_ID = "req-148-example";
 const metadataConfig = createTestRuntimeConfig({ apiKeys: [CURRENT_KEY] });
 const fetchMetadata = vi.fn<
-  (url: string, signal: AbortSignal) => Promise<YtdlpMetadata>
+  (
+    videoReference: YouTubeVideoReference,
+    signal: AbortSignal,
+  ) => Promise<YtdlpMetadata>
 >();
 const videoInformationWorkflow: VideoInformationWorkflow =
   createVideoInformationWorkflow({

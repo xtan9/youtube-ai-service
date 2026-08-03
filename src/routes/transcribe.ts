@@ -1,6 +1,5 @@
 import type { Hono } from "hono";
 import { z } from "zod";
-import { extractVideoId } from "../lib/captions.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import {
   parseLanguageTag,
@@ -9,7 +8,7 @@ import {
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import type { TranscriptionWorkflow } from "../lib/transcription-workflow.js";
-import { youtubeUrlSchema } from "../lib/youtube-url.js";
+import { youtubeVideoReferenceSchema } from "../lib/youtube-url.js";
 import {
   createDataRoute,
   readDataRequest,
@@ -26,7 +25,7 @@ export function createTranscribeRoute(
   const transcribe = createDataRoute("transcribe", config, admission);
 
   const requestSchema = z.object({
-    youtube_url: youtubeUrlSchema,
+    youtube_url: youtubeVideoReferenceSchema,
     // The language policy below owns canonicalization and rejection. Keeping
     // this intake field as text means aliases and script/region tags reach
     // that one policy before any provider work begins.
@@ -37,7 +36,7 @@ export function createTranscribeRoute(
     const intake = await readDataRequest(c, requestSchema);
     if (!intake.ok) return intake.response;
 
-    const { youtube_url: youtubeUrl, lang } = intake.data;
+    const { youtube_url: videoReference, lang } = intake.data;
     let languageTag: LanguageTag | undefined;
     if (lang !== undefined) {
       const parsedLanguageTag = parseLanguageTag(lang);
@@ -46,11 +45,11 @@ export function createTranscribeRoute(
       }
       languageTag = parsedLanguageTag.languageTag;
     }
-    const videoId = extractVideoId(youtubeUrl) ?? "unknown";
+    const videoId = videoReference.videoId;
 
     try {
       const outcome = await workflow({
-        youtubeUrl,
+        videoReference,
         language: languageTag?.primaryLanguageCode,
         signal: c.get("workSignal"),
         correlation: {

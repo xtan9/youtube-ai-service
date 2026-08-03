@@ -3,9 +3,12 @@ import { createTranscribeRoute } from "../transcribe.js";
 import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import { parseYouTubeVideoReference } from "../../lib/youtube-url.js";
 
 const VALID_KEY = "test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+const VIDEO_REFERENCE = parseYouTubeVideoReference(VIDEO_URL);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
 const workflow = vi.fn<TranscriptionWorkflow>();
 const transcribeConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const transcribe = createTranscribeRoute(
@@ -58,7 +61,7 @@ describe("POST /transcribe HTTP boundary", () => {
 
     expect(workflow).toHaveBeenCalledWith(
       {
-        youtubeUrl: VIDEO_URL,
+        videoReference: VIDEO_REFERENCE,
         language: "fr",
         correlation: {
           requestId: "workflow-request-id",
@@ -77,7 +80,7 @@ describe("POST /transcribe HTTP boundary", () => {
 
     expect(workflow).toHaveBeenCalledWith(
       expect.objectContaining({
-        youtubeUrl: VIDEO_URL,
+        videoReference: VIDEO_REFERENCE,
         language: "zh",
       }),
     );

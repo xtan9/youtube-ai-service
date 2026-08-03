@@ -95,6 +95,16 @@ describe("production transcription composition", () => {
     expect(mocks.createGroqTranscriber).not.toHaveBeenCalled();
     expect(mocks.transcribeAudio).toHaveBeenCalledOnce();
     expect(mocks.transcribeViaGroq).not.toHaveBeenCalled();
+    expect(mocks.downloadAudio).toHaveBeenCalledWith(
+      {
+        url: VIDEO_URL,
+        videoId: "dQw4w9WgXcQ",
+      },
+      "/tmp/audio.mp3",
+      expect.any(Number),
+      expect.any(AbortSignal),
+    );
+    expect(Object.isFrozen(mocks.downloadAudio.mock.calls[0]?.[0])).toBe(true);
   });
 
   it("constructs a runnable Groq-first workflow with Groq configuration", async () => {

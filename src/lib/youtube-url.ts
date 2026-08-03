@@ -1,10 +1,9 @@
 import { z } from "zod";
 
-// Zod's built-in `.url()` accepts any WHATWG-parsable URL — `ftp://...`,
-// `https://phisher.example/?token=...`, `http://user:pass@host/`. Accepting
-// those would let an authed caller smuggle arbitrary strings that we then
-// hand to yt-dlp / the caption library / error logs. Restrict at the
-// schema boundary so downstream code never sees a non-YouTube URL.
+// This module owns the complete YouTube Video Reference policy. Keep URL
+// recognition and Video ID extraction together: a route must not be able to
+// accept one definition of a YouTube URL and hand a downstream workflow a
+// Video ID derived by a different parser.
 const YOUTUBE_HOSTS: ReadonlySet<string> = new Set([
   "youtube.com",
   "www.youtube.com",
@@ -15,38 +14,95 @@ const YOUTUBE_HOSTS: ReadonlySet<string> = new Set([
 
 const VIDEO_ID_PATTERN = /^[a-zA-Z0-9_-]{11}$/;
 
-function hasVideoId(url: URL): boolean {
+declare const youtubeVideoReferenceBrand: unique symbol;
+
+/** The validated identity of one YouTube video request. */
+export type YouTubeVideoReference = Readonly<{
+  readonly url: string;
+  readonly videoId: string;
+  readonly [youtubeVideoReferenceBrand]: "YouTubeVideoReference";
+}>;
+
+function extractVideoIdFromUrl(url: URL): string | null {
   const pathSegments = url.pathname.split("/").filter(Boolean);
   if (url.hostname === "youtu.be") {
-    return VIDEO_ID_PATTERN.test(pathSegments[0] ?? "");
+    const videoId = pathSegments[0] ?? "";
+    return VIDEO_ID_PATTERN.test(videoId) ? videoId : null;
   }
 
   const queryVideoId = url.searchParams.get("v");
-  if (queryVideoId && VIDEO_ID_PATTERN.test(queryVideoId)) return true;
+  if (queryVideoId && VIDEO_ID_PATTERN.test(queryVideoId)) {
+    return queryVideoId;
+  }
 
-  return (
+  const pathVideoId =
     (pathSegments[0] === "shorts" || pathSegments[0] === "embed") &&
     VIDEO_ID_PATTERN.test(pathSegments[1] ?? "")
-  );
+      ? pathSegments[1]
+      : null;
+  return pathVideoId ?? null;
 }
 
-export function isYoutubeUrl(url: string): boolean {
+/**
+ * Parse untrusted input into the service's one canonical YouTube identity.
+ *
+ * The returned object is frozen at runtime as well as readonly in TypeScript;
+ * downstream code can safely pass it across workflow and provider seams.
+ */
+export function parseYouTubeVideoReference(
+  input: unknown,
+): YouTubeVideoReference | null {
+  if (typeof input !== "string") return null;
+
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(input);
     // Reject non-http(s) schemes even if the host is right — `ftp://`,
-    // `javascript:`, `data:` URLs with a youtube host are still not
-    // valid YouTube videos and shouldn't be forwarded downstream.
+    // `javascript:`, and `data:` URLs are not valid YouTube videos.
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return false;
+      return null;
     }
-    return YOUTUBE_HOSTS.has(parsed.hostname) && hasVideoId(parsed);
+    // Credentials are not part of a YouTube Video Reference. Passing them to
+    // yt-dlp or recording them in a provider error would create a credential
+    // forwarding and logging hazard.
+    if (parsed.username !== "" || parsed.password !== "") return null;
+    if (!YOUTUBE_HOSTS.has(parsed.hostname)) return null;
+
+    const videoId = extractVideoIdFromUrl(parsed);
+    if (!videoId) return null;
+
+    return Object.freeze({ url: input, videoId }) as YouTubeVideoReference;
   } catch {
-    return false;
+    return null;
   }
 }
 
-export const youtubeUrlSchema = z
-  .url()
-  .refine(isYoutubeUrl, {
-    message: "URL must be a YouTube URL",
-  });
+export function isYoutubeUrl(url: string): boolean {
+  return parseYouTubeVideoReference(url) !== null;
+}
+
+/** Extract the canonical ID only through the shared YouTube policy. */
+export function extractVideoId(url: string): string | null {
+  return parseYouTubeVideoReference(url)?.videoId ?? null;
+}
+
+/**
+ * Request-boundary schema. Its output is the immutable reference, not a raw
+ * URL string, so all downstream consumers share one validated identity.
+ */
+export const youtubeVideoReferenceSchema = z.url().transform((url, ctx) => {
+  const reference = parseYouTubeVideoReference(url);
+  if (!reference) {
+    ctx.addIssue({
+      code: "custom",
+      message: "URL must be a YouTube URL",
+    });
+    return z.NEVER;
+  }
+  return reference;
+});
+
+// Kept for internal compatibility with callers that only need URL validation.
+// It delegates to the same policy and never maintains a second parser.
+export const youtubeUrlSchema = youtubeVideoReferenceSchema.transform(
+  (reference) => reference.url,
+);

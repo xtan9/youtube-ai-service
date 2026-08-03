@@ -5,10 +5,15 @@ import {
 } from "../captions.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import { parseYouTubeVideoReference } from "../../lib/youtube-url.js";
 
 // All route tests run with a valid VPS_API_KEY in env — the auth path is
 // also exercised via a dedicated block below.
 const VALID_KEY = "test-key";
+const VIDEO_REFERENCE = parseYouTubeVideoReference(
+  "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
 const captionsDependencies: CaptionsRouteDependencies = {
   fetchCaptions: vi.fn(),
 };
@@ -156,7 +161,10 @@ describe("POST /captions", () => {
       lang: "fra-CA",
     });
     expect(spy).toHaveBeenCalledWith(
-      expect.any(String),
+      expect.objectContaining({
+        url: VIDEO_REFERENCE.url,
+        videoId: VIDEO_REFERENCE.videoId,
+      }),
       {
         tag: "fr-CA",
         primaryLanguageCode: "fr",
@@ -164,6 +172,7 @@ describe("POST /captions", () => {
       expect.any(String),
       expect.any(AbortSignal),
     );
+    expect(Object.isFrozen(spy.mock.calls[0]?.[0])).toBe(true);
   });
 
   it("omits `lang` when the caller didn't send one (back-compat)", async () => {
@@ -177,11 +186,15 @@ describe("POST /captions", () => {
     // filter was applied. The request ID is the new third argument used for
     // correlated structured service logs.
     expect(spy).toHaveBeenCalledWith(
-      expect.any(String),
+      expect.objectContaining({
+        url: VIDEO_REFERENCE.url,
+        videoId: VIDEO_REFERENCE.videoId,
+      }),
       undefined,
       expect.any(String),
       expect.any(AbortSignal),
     );
+    expect(Object.isFrozen(spy.mock.calls[0]?.[0])).toBe(true);
   });
 
   it.each([

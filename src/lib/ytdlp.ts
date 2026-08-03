@@ -6,6 +6,7 @@ import { join } from "path";
 import { buildYtdlpCommonArgs } from "./ytdlp-common.js";
 import { isNodeErrorWithCode } from "./node-errors.js";
 import type { MediaAcquisitionConfig } from "./runtime-config.js";
+import type { YouTubeVideoReference } from "./youtube-url.js";
 
 export class AudioMediaLimitError extends Error {
   constructor(
@@ -29,7 +30,7 @@ export function createAudioPath(): string {
 }
 
 export function buildYtdlpArgs(
-  url: string,
+  videoReference: YouTubeVideoReference,
   outputPath: string,
   config: MediaAcquisitionConfig
 ): string[] {
@@ -42,7 +43,7 @@ export function buildYtdlpArgs(
     ...buildYtdlpCommonArgs(config),
     "-o",
     outputPath,
-    url,
+    videoReference.url,
   ];
 }
 
@@ -52,22 +53,29 @@ export function buildYtdlpArgs(
  */
 export function createAudioDownloader(config: MediaAcquisitionConfig) {
   return (
-    youtubeUrl: string,
+    videoReference: YouTubeVideoReference,
     outputPath: string,
     maxBytes?: number,
     signal?: AbortSignal,
-  ) => downloadAudioWithConfig(config, youtubeUrl, outputPath, maxBytes, signal);
+  ) =>
+    downloadAudioWithConfig(
+      config,
+      videoReference,
+      outputPath,
+      maxBytes,
+      signal,
+    );
 }
 
 async function downloadAudioWithConfig(
   config: MediaAcquisitionConfig,
-  youtubeUrl: string,
+  videoReference: YouTubeVideoReference,
   outputPath: string,
   maxBytes?: number,
   signal?: AbortSignal,
 ): Promise<void> {
   const stderr = await new Promise<string>((resolve, reject) => {
-    const args = buildYtdlpArgs(youtubeUrl, outputPath, config);
+    const args = buildYtdlpArgs(videoReference, outputPath, config);
     execFile("yt-dlp", args, { timeout: 300_000, signal }, (error, _stdout, err) => {
       if (error) {
         reject(

@@ -1,11 +1,14 @@
 import type { Hono } from "hono";
 import { z } from "zod";
-import { extractVideoId, type CaptionResult } from "../lib/captions.js";
+import type { CaptionResult } from "../lib/captions.js";
 import {
   parseLanguageTag,
   type LanguageTag,
 } from "../lib/language-tag.js";
-import { youtubeUrlSchema } from "../lib/youtube-url.js";
+import {
+  type YouTubeVideoReference,
+  youtubeVideoReferenceSchema,
+} from "../lib/youtube-url.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
@@ -20,7 +23,7 @@ type CaptionsRouteConfig = DataRouteConfig;
 
 export interface CaptionsRouteDependencies {
   fetchCaptions(
-    youtubeUrl: string,
+    videoReference: YouTubeVideoReference,
     lang: LanguageTag | undefined,
     requestId: string,
     signal: AbortSignal,
@@ -35,7 +38,7 @@ export function createCaptionsRoute(
   const captions = createDataRoute("captions", config, admission);
 
   const requestSchema = z.object({
-    youtube_url: youtubeUrlSchema,
+    youtube_url: youtubeVideoReferenceSchema,
     // Keep text intake separate from the canonical language policy. This
     // lets the policy classify malformed, sentinel, and unsupported-primary
     // values into the same bounded 400 response before provider work.
@@ -46,7 +49,7 @@ export function createCaptionsRoute(
     const intake = await readDataRequest(c, requestSchema);
     if (!intake.ok) return intake.response;
 
-    const { youtube_url, lang } = intake.data;
+    const { youtube_url: videoReference, lang } = intake.data;
     let languageTag: LanguageTag | undefined;
     if (lang !== undefined) {
       const parsedLanguageTag = parseLanguageTag(lang);
@@ -56,11 +59,9 @@ export function createCaptionsRoute(
       languageTag = parsedLanguageTag.languageTag;
     }
 
-    // Log only the videoId, never the full URL. YouTube URLs are unlikely
-    // to contain secrets in practice, but the zod schema above only
-    // constrains the host — tracker/analytics query strings the frontend
-    // might append would still land in the log aggregator verbatim.
-    const videoId = extractVideoId(youtube_url) ?? "unknown";
+    // Log only the Video ID, never the full URL. Tracker/analytics query
+    // strings the frontend might append must not reach the log aggregator.
+    const videoId = videoReference.videoId;
 
     try {
       logServiceEvent("info", "captions.fetch", {
@@ -69,7 +70,7 @@ export function createCaptionsRoute(
         lang: languageTag?.tag,
       });
       const result = await dependencies.fetchCaptions(
-        youtube_url,
+        videoReference,
         languageTag,
         c.get("requestId"),
         c.get("workSignal"),

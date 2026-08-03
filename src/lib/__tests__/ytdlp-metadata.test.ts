@@ -4,11 +4,16 @@ import {
   createYtdlpMetadataFetcher,
   YtdlpAcquisitionError,
 } from "../ytdlp-metadata.js";
+import { parseYouTubeVideoReference } from "../youtube-url.js";
 
 const mediaConfig = {
   potProviderUrl: "http://custom-pot-provider.internal:4416",
 };
 const fetchYtdlpMetadata = createYtdlpMetadataFetcher(mediaConfig);
+const VIDEO_REFERENCE = parseYouTubeVideoReference(
+  "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
 
 // ESM module spying requires vi.mock at module scope — vi.spyOn on an
 // imported namespace fails with "Module namespace is not configurable".
@@ -21,7 +26,7 @@ const mockedExecFile = vi.mocked(execFile);
 
 describe("buildYtdlpMetadataArgs", () => {
   it("includes --dump-json and --skip-download (the whole point — no audio transfer)", () => {
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
+    const args = buildYtdlpMetadataArgs(VIDEO_REFERENCE, mediaConfig);
     expect(args).toContain("--dump-json");
     expect(args).toContain("--skip-download");
   });
@@ -30,7 +35,7 @@ describe("buildYtdlpMetadataArgs", () => {
     // If these drift, the metadata path would hit YouTube's bot wall while
     // the download path works — producing a false "no language signal"
     // every time. Lock them to the same profile.
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
+    const args = buildYtdlpMetadataArgs(VIDEO_REFERENCE, mediaConfig);
     const extractorArgValues = args
       .map((a, i) => (a === "--extractor-args" ? args[i + 1] : null))
       .filter((v): v is string => v !== null);
@@ -44,15 +49,15 @@ describe("buildYtdlpMetadataArgs", () => {
   });
 
   it("sets a browser User-Agent matching the audio-path profile", () => {
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
+    const args = buildYtdlpMetadataArgs(VIDEO_REFERENCE, mediaConfig);
     const uaIdx = args.indexOf("--user-agent");
     expect(uaIdx).toBeGreaterThan(-1);
     expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
   });
 
   it("puts the URL last (yt-dlp positional arg convention)", () => {
-    const args = buildYtdlpMetadataArgs("https://youtu.be/abc", mediaConfig);
-    expect(args[args.length - 1]).toBe("https://youtu.be/abc");
+    const args = buildYtdlpMetadataArgs(VIDEO_REFERENCE, mediaConfig);
+    expect(args[args.length - 1]).toBe(VIDEO_REFERENCE.url);
   });
 });
 
@@ -87,7 +92,7 @@ describe("fetchYtdlpMetadata", () => {
     const signal = new AbortController().signal;
     mockExecSuccess(JSON.stringify({ id: "abc" }));
 
-    await fetchYtdlpMetadata("https://youtu.be/abc", signal);
+    await fetchYtdlpMetadata(VIDEO_REFERENCE, signal);
 
     expect(mockedExecFile).toHaveBeenCalledWith(
       "yt-dlp",
@@ -108,7 +113,7 @@ describe("fetchYtdlpMetadata", () => {
         automatic_captions: { en: [{ url: "y", ext: "vtt" }] },
       })
     );
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
     expect(result.title).toBe("Test Video");
     expect(result.description).toBe("A test video");
     expect(result.language).toEqual({
@@ -145,7 +150,7 @@ describe("fetchYtdlpMetadata", () => {
       }),
     );
 
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
 
     expect(result.language).toEqual({
       tag: "zh-Hant-TW",
@@ -182,7 +187,7 @@ describe("fetchYtdlpMetadata", () => {
       }),
     );
 
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
 
     expect(result.language).toBeNull();
     expect(result.subtitles).toEqual([]);
@@ -206,7 +211,7 @@ describe("fetchYtdlpMetadata", () => {
     );
     mockExecSuccess(JSON.stringify({ id: "abc", subtitles }));
 
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
 
     expect(result.languageTagRejections).toHaveLength(1_000);
     expect(JSON.stringify(result.languageTagRejections)).not.toContain(
@@ -220,7 +225,7 @@ describe("fetchYtdlpMetadata", () => {
     // null. Our downstream consumers expect the fields to exist, so
     // normalize here rather than scattering optional-chaining everywhere.
     mockExecSuccess(JSON.stringify({ title: "Only Title" }));
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
     expect(result.title).toBe("Only Title");
     expect(result.description).toBe("");
     expect(result.language).toBeNull();
@@ -261,14 +266,14 @@ describe("fetchYtdlpMetadata", () => {
       const payload: Record<string, unknown> = { id: "abc" };
       if (value !== undefined) payload.duration = value;
       mockExecSuccess(JSON.stringify(payload));
-      const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+      const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
       expect(result.duration).toBeNull();
     }
   );
 
   it("preserves duration=0 (a valid edge — zero-second clips exist)", async () => {
     mockExecSuccess(JSON.stringify({ id: "abc", duration: 0 }));
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
     expect(result.duration).toBe(0);
   });
 
@@ -278,7 +283,7 @@ describe("fetchYtdlpMetadata", () => {
     // error, a persistent yt-dlp issue would be invisible except as a
     // rising cost-per-request.
     mockExecFailure(new Error("yt-dlp exit 1"), "ERROR: unavailable");
-    const error = await fetchYtdlpMetadata("https://youtu.be/abc").then(
+    const error = await fetchYtdlpMetadata(VIDEO_REFERENCE).then(
       () => undefined,
       (rejection: unknown) => rejection,
     );
@@ -294,7 +299,7 @@ describe("fetchYtdlpMetadata", () => {
     // defaults, matching the "no signal" case — hiding a real extraction
     // failure. Throw so the route can log + return 500.
     mockExecSuccess("not json at all");
-    await expect(fetchYtdlpMetadata("https://youtu.be/abc")).rejects.toBeInstanceOf(
+    await expect(fetchYtdlpMetadata(VIDEO_REFERENCE)).rejects.toBeInstanceOf(
       YtdlpAcquisitionError,
     );
   });
@@ -305,7 +310,7 @@ describe("fetchYtdlpMetadata", () => {
     // return 200 and the orchestrator would pin an arbitrary language
     // to whisper. Catch the regression here at the boundary.
     mockExecSuccess(JSON.stringify({}));
-    await expect(fetchYtdlpMetadata("https://youtu.be/abc")).rejects.toBeInstanceOf(
+    await expect(fetchYtdlpMetadata(VIDEO_REFERENCE)).rejects.toBeInstanceOf(
       YtdlpAcquisitionError,
     );
   });
@@ -316,7 +321,7 @@ describe("fetchYtdlpMetadata", () => {
     ["a string", "not an object"],
   ])("classifies %s stdout payload as acquisition failure", async (_label, payload) => {
     mockExecSuccess(JSON.stringify(payload));
-    await expect(fetchYtdlpMetadata("https://youtu.be/abc")).rejects.toBeInstanceOf(
+    await expect(fetchYtdlpMetadata(VIDEO_REFERENCE)).rejects.toBeInstanceOf(
       YtdlpAcquisitionError,
     );
   });
@@ -333,7 +338,7 @@ describe("fetchYtdlpMetadata", () => {
     );
 
     await expect(
-      fetchYtdlpMetadata("https://youtu.be/abc", controller.signal),
+      fetchYtdlpMetadata(VIDEO_REFERENCE, controller.signal),
     ).rejects.toBe(reason);
   });
 
@@ -341,7 +346,7 @@ describe("fetchYtdlpMetadata", () => {
     // Some uploads have no description, no uploader, no language — but
     // every real video has an `id`. Don't over-tighten the guard.
     mockExecSuccess(JSON.stringify({ id: "abc123" }));
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
     expect(result.title).toBe("");
     expect(result.language).toBeNull();
   });
@@ -354,7 +359,7 @@ describe("fetchYtdlpMetadata", () => {
     mockExecSuccess(
       JSON.stringify({ title: "t", description: longDescription })
     );
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
     expect(result.description.length).toBe(2000);
   });
 
@@ -378,7 +383,7 @@ describe("fetchYtdlpMetadata", () => {
       }),
     );
 
-    const result = await fetchYtdlpMetadata("https://youtu.be/abc");
+    const result = await fetchYtdlpMetadata(VIDEO_REFERENCE);
 
     expect(result.subtitles).toEqual([
       {

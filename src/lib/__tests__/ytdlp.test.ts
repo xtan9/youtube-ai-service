@@ -1,5 +1,6 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
 import { buildYtdlpArgs, createAudioDownloader } from "../ytdlp.js";
+import { parseYouTubeVideoReference } from "../youtube-url.js";
 
 vi.mock("child_process", () => ({ execFile: vi.fn() }));
 
@@ -10,6 +11,10 @@ const mockedExecFile = vi.mocked(execFile);
 const mediaConfig = {
   potProviderUrl: "http://custom-pot-provider.internal:4416",
 };
+const VIDEO_REFERENCE = parseYouTubeVideoReference(
+  "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
 
 describe("buildYtdlpArgs", () => {
   beforeEach(() => {
@@ -18,7 +23,7 @@ describe("buildYtdlpArgs", () => {
 
   it("builds correct yt-dlp arguments", () => {
     const args = buildYtdlpArgs(
-      "https://www.youtube.com/watch?v=test123",
+      VIDEO_REFERENCE,
       "/tmp/audio.mp3",
       mediaConfig
     );
@@ -27,12 +32,12 @@ describe("buildYtdlpArgs", () => {
     expect(args).toContain("mp3");
     expect(args).toContain("-o");
     expect(args).toContain("/tmp/audio.mp3");
-    expect(args).toContain("https://www.youtube.com/watch?v=test123");
+    expect(args).toContain(VIDEO_REFERENCE.url);
   });
 
   it("never tries the default `web` client first (it's the one hit by the datacenter-IP bot-wall)", () => {
     const args = buildYtdlpArgs(
-      "https://youtu.be/x",
+      VIDEO_REFERENCE,
       "/tmp/x.mp3",
       mediaConfig
     );
@@ -53,7 +58,7 @@ describe("buildYtdlpArgs", () => {
 
   it("sets a browser User-Agent matching the player_client profile", () => {
     const args = buildYtdlpArgs(
-      "https://youtu.be/x",
+      VIDEO_REFERENCE,
       "/tmp/x.mp3",
       mediaConfig
     );
@@ -66,7 +71,7 @@ describe("buildYtdlpArgs", () => {
     // Missing this arg means yt-dlp falls back to no-PO-Token mode, which
     // YouTube rejects for player responses regardless of IP or cookies.
     const args = buildYtdlpArgs(
-      "https://youtu.be/x",
+      VIDEO_REFERENCE,
       "/tmp/x.mp3",
       mediaConfig
     );
@@ -102,7 +107,7 @@ describe("buildYtdlpArgs", () => {
 
     await expect(
       createAudioDownloader(mediaConfig)(
-        "https://youtu.be/x",
+        VIDEO_REFERENCE,
         "/tmp/x.mp3",
         1_000,
         signal,
