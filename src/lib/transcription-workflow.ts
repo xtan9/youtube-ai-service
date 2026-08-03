@@ -9,6 +9,7 @@ import { logServiceEvent } from "./observability.js";
 import type { RuntimeConfig } from "./runtime-config.js";
 import type { PrimaryLanguageCode } from "./language-tag.js";
 import { LocalTranscriptionError, transcribeAudio } from "./whisper.js";
+import type { YouTubeVideoReference } from "./youtube-url.js";
 import {
   AudioDownloadError,
   AudioMediaLimitError,
@@ -32,7 +33,7 @@ function isOperationalCompressKind(kind: AudioCompressKind): boolean {
 }
 
 export interface TranscriptionWorkflowInput {
-  youtubeUrl: string;
+  videoReference: YouTubeVideoReference;
   language?: PrimaryLanguageCode;
   signal: AbortSignal;
   correlation: {
@@ -64,7 +65,7 @@ export type TranscriptionWorkflowPolicy =
 export interface TranscriptionWorkflowDependencies {
   createAudioPath(): string;
   downloadAudio(
-    youtubeUrl: string,
+    videoReference: YouTubeVideoReference,
     audioPath: string,
     maxBytes: number,
     signal: AbortSignal,
@@ -123,7 +124,10 @@ export function createTranscriptionWorkflow(
   let groqKeyMissingWarned = false;
 
   return async (input) => {
-    const correlation = input.correlation;
+    const correlation = {
+      requestId: input.correlation.requestId,
+      videoId: input.videoReference.videoId,
+    };
     dependencies.logEvent("info", "transcribe.start", {
       ...correlation,
       lang: input.language,
@@ -134,7 +138,7 @@ export function createTranscriptionWorkflow(
 
       try {
         await dependencies.downloadAudio(
-          input.youtubeUrl,
+          input.videoReference,
           audioPath,
           mediaMaxBytes,
           input.signal,

@@ -6,6 +6,7 @@ import {
   type LanguageTagParseFailureReason,
 } from "./language-tag.js";
 import type { MediaAcquisitionConfig } from "./runtime-config.js";
+import type { YouTubeVideoReference } from "./youtube-url.js";
 
 export interface YtdlpCaptionTrack {
   readonly url: string;
@@ -72,14 +73,14 @@ const MAX_LANGUAGE_TAG_REJECTIONS = 1_000;
  * successful download implies a successful metadata fetch (and vice versa).
  */
 export function buildYtdlpMetadataArgs(
-  url: string,
+  videoReference: YouTubeVideoReference,
   config: MediaAcquisitionConfig
 ): string[] {
   return [
     "--dump-json",
     "--skip-download",
     ...buildYtdlpCommonArgs(config),
-    url,
+    videoReference.url,
   ];
 }
 
@@ -90,16 +91,16 @@ export function buildYtdlpMetadataArgs(
  * cancellation cannot be mistaken for provider unavailability.
  */
 export function createYtdlpMetadataFetcher(config: MediaAcquisitionConfig) {
-  return (url: string, signal?: AbortSignal) =>
-    fetchYtdlpMetadataWithConfig(config, url, signal);
+  return (videoReference: YouTubeVideoReference, signal?: AbortSignal) =>
+    fetchYtdlpMetadataWithConfig(config, videoReference, signal);
 }
 
 async function fetchYtdlpMetadataWithConfig(
   config: MediaAcquisitionConfig,
-  url: string,
+  videoReference: YouTubeVideoReference,
   signal?: AbortSignal,
 ): Promise<YtdlpMetadata> {
-  const args = buildYtdlpMetadataArgs(url, config);
+  const args = buildYtdlpMetadataArgs(videoReference, config);
 
   signal?.throwIfAborted();
 

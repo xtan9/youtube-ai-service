@@ -1,13 +1,12 @@
 import type { Hono } from "hono";
 import { z } from "zod";
-import { extractVideoId } from "../lib/captions.js";
 import {
   respondWithOperationalOutcomeWithoutLog,
 } from "../lib/http-errors.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
 import type { VideoInformationWorkflow } from "../lib/video-information-workflow.js";
-import { youtubeUrlSchema } from "../lib/youtube-url.js";
+import { youtubeVideoReferenceSchema } from "../lib/youtube-url.js";
 import {
   createDataRoute,
   readDataRequest,
@@ -24,19 +23,19 @@ export function createMetadataRoute(
   const metadata = createDataRoute("metadata", config, admission);
 
   const requestSchema = z.object({
-    youtube_url: youtubeUrlSchema,
+    youtube_url: youtubeVideoReferenceSchema,
   });
 
   metadata.post("/", async (c) => {
     const intake = await readDataRequest(c, requestSchema);
     if (!intake.ok) return intake.response;
 
-    const { youtube_url } = intake.data;
-    const videoId = extractVideoId(youtube_url) ?? "unknown";
+    const { youtube_url: videoReference } = intake.data;
+    const videoId = videoReference.videoId;
 
     try {
       const outcome = await workflow({
-        youtubeUrl: youtube_url,
+        videoReference,
         signal: c.get("workSignal"),
         correlation: {
           requestId: c.get("requestId"),

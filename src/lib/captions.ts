@@ -15,6 +15,7 @@ import {
   type LanguageTag,
 } from "./language-tag.js";
 import { logServiceEvent } from "./observability.js";
+import type { YouTubeVideoReference } from "./youtube-url.js";
 
 // Caption fetching must run from an IP YouTube classifies as residential —
 // datacenter IPs get caption-track URLs stripped from the watch-page
@@ -103,24 +104,6 @@ export function decodeCaptionEntities(text: string): string {
   const once = decodeEntitiesOnce(text);
   if (once === text) return once;
   return decodeEntitiesOnce(once);
-}
-
-// 11-char YouTube video IDs. Covers watch, youtu.be shortlink, Shorts,
-// and embed forms. Hostless so m.youtube.com / music.youtube.com flow
-// through the same patterns.
-const VIDEO_ID_PATTERNS: readonly RegExp[] = [
-  /youtu\.be\/([a-zA-Z0-9_-]{11})/,
-  /[?&]v=([a-zA-Z0-9_-]{11})/,
-  /\/shorts\/([a-zA-Z0-9_-]{11})/,
-  /\/embed\/([a-zA-Z0-9_-]{11})/,
-];
-
-export function extractVideoId(url: string): string | null {
-  for (const pattern of VIDEO_ID_PATTERNS) {
-    const match = url.match(pattern);
-    if (match) return match[1];
-  }
-  return null;
 }
 
 // youtube-transcript-plus matches a requested `lang` against the provider's
@@ -230,7 +213,7 @@ export function pickLocale(
 }
 
 /**
- * Fetch auto-captions for a YouTube URL.
+ * Fetch auto-captions for one validated YouTube Video Reference.
  *
  * When `lang` is provided, forwards it to the library so the specific
  * caption track is selected instead of `tracks[0]` (which YouTube can
@@ -243,13 +226,12 @@ export function pickLocale(
  * hiding real problems behind compute bills.
  */
 export async function fetchCaptions(
-  youtubeUrl: string,
+  videoReference: YouTubeVideoReference,
   lang?: LanguageTag,
   requestId?: string,
   signal?: AbortSignal,
 ): Promise<CaptionResult | null> {
-  const videoId = extractVideoId(youtubeUrl);
-  if (!videoId) return null;
+  const videoId = videoReference.videoId;
 
   let result: TranscriptResult;
   try {

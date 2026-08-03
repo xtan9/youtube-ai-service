@@ -5,9 +5,15 @@ import {
   type TranscriptionWorkflowInput,
   type TranscriptionWorkflowPolicy,
 } from "../transcription-workflow.js";
+import { parseYouTubeVideoReference } from "../youtube-url.js";
+
+const VIDEO_REFERENCE = parseYouTubeVideoReference(
+  "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
 
 const INPUT: TranscriptionWorkflowInput = {
-  youtubeUrl: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  videoReference: VIDEO_REFERENCE,
   signal: new AbortController().signal,
   correlation: {
     requestId: "policy-request-id",

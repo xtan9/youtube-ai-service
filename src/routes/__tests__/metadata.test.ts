@@ -3,10 +3,13 @@ import { createMetadataRoute } from "../metadata.js";
 import type { VideoInformationWorkflow } from "../../lib/video-information-workflow.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import { parseYouTubeVideoReference } from "../../lib/youtube-url.js";
 import { languageTag } from "../../test-support/language-metadata.js";
 
 const VALID_KEY = "test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+const VIDEO_REFERENCE = parseYouTubeVideoReference(VIDEO_URL);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
 const metadataConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const videoInformationWorkflow = vi.fn<VideoInformationWorkflow>();
 const metadata = createMetadataRoute(
@@ -78,7 +81,7 @@ describe("POST /metadata", () => {
 
     expect(response.status).toBe(200);
     expect(videoInformationWorkflow).toHaveBeenCalledWith({
-      youtubeUrl: VIDEO_URL,
+      videoReference: VIDEO_REFERENCE,
       signal: expect.any(AbortSignal),
       correlation: {
         requestId: expect.any(String),

@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   decodeCaptionEntities,
-  extractVideoId,
   fetchCaptions,
   isExpectedNoCaptions,
   pickLocale,
@@ -17,6 +16,7 @@ import {
   parseLanguageTag,
   type LanguageTag,
 } from "../language-tag.js";
+import { parseYouTubeVideoReference } from "../youtube-url.js";
 
 // ESM module spying requires vi.mock at module scope — vi.spyOn on an
 // imported namespace fails with "Module namespace is not configurable".
@@ -30,51 +30,17 @@ vi.mock("youtube-transcript-plus", async () => {
 
 const mockedFetchTranscript = vi.mocked(fetchTranscript);
 
+const VIDEO_REFERENCE = parseYouTubeVideoReference(
+  "https://youtu.be/dQw4w9WgXcQ",
+);
+if (!VIDEO_REFERENCE) throw new Error("test fixture must be a YouTube URL");
+
 const languageTag = (input: string): LanguageTag => {
   const result = parseLanguageTag(input);
   if (!result.ok) throw new Error(`Expected a Language Tag: ${input}`);
   return result.languageTag;
 };
 
-describe("extractVideoId", () => {
-  // Spec is "URL forms the endpoint accepts" — adding to this table is
-  // the contract extension point. Removals are breaking changes.
-  it.each([
-    ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"],
-    ["https://youtu.be/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
-    ["https://youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
-    ["https://www.youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"],
-    [
-      "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLxxx&index=2",
-      "dQw4w9WgXcQ",
-    ],
-    ["https://m.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"],
-    ["https://music.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"],
-  ])("extracts from %s", (url, expected) => {
-    expect(extractVideoId(url)).toBe(expected);
-  });
-
-  it.each([
-    "https://example.com/not-youtube",
-    "https://www.youtube.com/",
-    "not-a-url-at-all",
-    "",
-  ])("returns null for %s", (url) => {
-    expect(extractVideoId(url)).toBeNull();
-  });
-
-  it("rejects bare video IDs that lack URL structure", () => {
-    expect(extractVideoId("dQw4w9WgXcQ")).toBeNull();
-  });
-
-  it("rejects URLs whose ID segment is too short to be a valid YouTube ID", () => {
-    // IDs under 11 chars can't match the {11} quantifier, so they're
-    // rejected outright. Overlong IDs (12+) have defensible
-    // "take-the-prefix" behavior — we don't test for that since the
-    // YouTube API would 404 on an invalid prefix anyway.
-    expect(extractVideoId("https://youtu.be/dQw4w9WgXc")).toBeNull();
-  });
-});
 
 describe("isExpectedNoCaptions", () => {
   it("classifies library-defined no-captions errors as expected", () => {
@@ -245,11 +211,15 @@ describe("fetchCaptions", () => {
       videoDetails: { title: "t", author: "a" },
     } as unknown as TranscriptSegment[]);
 
-  it("returns null when the URL has no extractable video ID", async () => {
+  it("uses the canonical Video ID from the validated reference", async () => {
     // Short-circuits before hitting the library — protects against
     // spamming YouTube with bare-ID or invalid-URL requests.
-    expect(await fetchCaptions("not-a-url")).toBeNull();
-    expect(mockedFetchTranscript).not.toHaveBeenCalled();
+    mockedFetchTranscript.mockResolvedValue(ok([{ text: "hello", lang: "en" }]));
+    await fetchCaptions(VIDEO_REFERENCE);
+    expect(mockedFetchTranscript).toHaveBeenCalledWith(
+      VIDEO_REFERENCE.videoId,
+      { videoDetails: true },
+    );
   });
 
   it("returns null on expected no-captions errors (quiet, logs nothing)", async () => {
@@ -257,7 +227,7 @@ describe("fetchCaptions", () => {
     mockedFetchTranscript.mockRejectedValue(
       new YoutubeTranscriptDisabledError("x")
     );
-    const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    const result = await fetchCaptions(VIDEO_REFERENCE);
     expect(result).toBeNull();
     expect(errorSpy).not.toHaveBeenCalled();
   });
@@ -272,7 +242,7 @@ describe("fetchCaptions", () => {
       new TypeError("schema drift")
     );
     await expect(
-      fetchCaptions("https://youtu.be/dQw4w9WgXcQ")
+      fetchCaptions(VIDEO_REFERENCE)
     ).rejects.toThrow("schema drift");
   });
 
@@ -282,7 +252,7 @@ describe("fetchCaptions", () => {
       new TypeError("schema drift")
     );
     await expect(
-      fetchCaptions("https://youtu.be/dQw4w9WgXcQ")
+      fetchCaptions(VIDEO_REFERENCE)
     ).rejects.toThrow();
     expect(errorSpy).toHaveBeenCalledWith(
       "[captions.CAPTION_UNEXPECTED_FAILURE]",
@@ -299,7 +269,7 @@ describe("fetchCaptions", () => {
     // have captions. Pin the errorId so a future refactor can't drop it.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     mockedFetchTranscript.mockResolvedValue(ok([]));
-    expect(await fetchCaptions("https://youtu.be/dQw4w9WgXcQ")).toBeNull();
+    expect(await fetchCaptions(VIDEO_REFERENCE)).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
       "[captions.empty_segments]",
       expect.objectContaining({
@@ -314,7 +284,7 @@ describe("fetchCaptions", () => {
     mockedFetchTranscript.mockResolvedValue(
       ok([{ text: "   ", lang: "en" }, { text: "\n", lang: "en" }])
     );
-    expect(await fetchCaptions("https://youtu.be/dQw4w9WgXcQ")).toBeNull();
+    expect(await fetchCaptions(VIDEO_REFERENCE)).toBeNull();
     expect(warnSpy).toHaveBeenCalledWith(
       "[captions.empty_transcript]",
       expect.objectContaining({
@@ -335,7 +305,7 @@ describe("fetchCaptions", () => {
         { text: "foo", lang: "en", offset: 2, duration: 1.5 },
       ])
     );
-    const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    const result = await fetchCaptions(VIDEO_REFERENCE);
     expect(result?.segments).toEqual([
       { text: "  hello\tworld  ", start: 0, duration: 2 },
       { text: "foo", start: 2, duration: 1.5 },
@@ -349,7 +319,7 @@ describe("fetchCaptions", () => {
       segments: [{ text: "hello", lang: "en" }],
       videoDetails: undefined,
     } as unknown as TranscriptSegment[]);
-    const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    const result = await fetchCaptions(VIDEO_REFERENCE);
     expect(result?.title).toBeNull();
     expect(result?.channelName).toBeNull();
   });
@@ -361,7 +331,7 @@ describe("fetchCaptions", () => {
         { text: "world", lang: "zh-CN", offset: 1, duration: 2 },
       ])
     );
-    const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    const result = await fetchCaptions(VIDEO_REFERENCE);
     expect(result).toEqual({
       segments: [
         { text: "hello", start: 0, duration: 1 },
@@ -380,7 +350,7 @@ describe("fetchCaptions", () => {
     // NotAvailableLanguage — breaking the current "first track wins" flow
     // that existing callers depend on.
     mockedFetchTranscript.mockResolvedValue(ok([{ text: "hi", lang: "en" }]));
-    await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    await fetchCaptions(VIDEO_REFERENCE);
     const call = mockedFetchTranscript.mock.calls[0];
     expect(call[1]).toEqual({ videoDetails: true });
     expect(call[1]).not.toHaveProperty("lang");
@@ -397,7 +367,7 @@ describe("fetchCaptions", () => {
     mockedFetchTranscript.mockResolvedValue(
       ok([{ text: "你好", lang: "zh-CN", offset: 0, duration: 1 }])
     );
-    const result = await fetchCaptions("https://youtu.be/dQw4w9WgXcQ");
+    const result = await fetchCaptions(VIDEO_REFERENCE);
     // language === "zh" can ONLY come from the raw `lang: "zh-CN"` field —
     // mapped segments lack `lang` so pickLocale would default to "en".
     expect(result?.language).toBe("zh");
@@ -410,8 +380,7 @@ describe("fetchCaptions", () => {
     // The whole point of this parameter: without it, the library picks
     // `tracks[0]` which for some videos is the wrong language entirely.
     mockedFetchTranscript.mockResolvedValue(ok([{ text: "bonjour", lang: "fr" }]));
-    await fetchCaptions(
-      "https://youtu.be/dQw4w9WgXcQ",
+    await fetchCaptions(VIDEO_REFERENCE,
       languageTag("fr"),
     );
     const call = mockedFetchTranscript.mock.calls[0];
@@ -423,8 +392,7 @@ describe("fetchCaptions", () => {
       ok([{ text: "你好", lang: "zh-Hant-TW" }]),
     );
 
-    const result = await fetchCaptions(
-      "https://youtu.be/dQw4w9WgXcQ",
+    const result = await fetchCaptions(VIDEO_REFERENCE,
       languageTag("en"),
     );
 
@@ -439,8 +407,7 @@ describe("fetchCaptions", () => {
       );
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("zh-Hant-TW"),
         "request-id",
       );
@@ -462,7 +429,7 @@ describe("fetchCaptions", () => {
     });
 
     it("retries lang='zh' with the matching zh-Hans track and returns its segments", async () => {
-      const url = "https://youtu.be/dQw4w9WgXcQ";
+      const url = VIDEO_REFERENCE;
       mockedFetchTranscript
         .mockRejectedValueOnce(
           new YoutubeTranscriptNotAvailableLanguageError(
@@ -510,8 +477,7 @@ describe("fetchCaptions", () => {
         )
       );
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("zh")
       );
 
@@ -534,8 +500,7 @@ describe("fetchCaptions", () => {
 
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("fr-CA"),
       );
 
@@ -566,8 +531,7 @@ describe("fetchCaptions", () => {
 
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      await fetchCaptions(VIDEO_REFERENCE,
         languageTag("zh"),
       );
 
@@ -586,8 +550,7 @@ describe("fetchCaptions", () => {
         ),
       );
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("fr-CA"),
       );
 
@@ -606,8 +569,7 @@ describe("fetchCaptions", () => {
         )
       );
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("en-US")
       );
 
@@ -628,8 +590,7 @@ describe("fetchCaptions", () => {
 
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("zh")
       );
 
@@ -653,8 +614,7 @@ describe("fetchCaptions", () => {
 
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("ZH")
       );
 
@@ -680,8 +640,7 @@ describe("fetchCaptions", () => {
 
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("zh")
       );
 
@@ -704,8 +663,7 @@ describe("fetchCaptions", () => {
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       await expect(
-        fetchCaptions(
-          "https://youtu.be/dQw4w9WgXcQ",
+        fetchCaptions(VIDEO_REFERENCE,
           languageTag("zh"),
         )
       ).rejects.toBeInstanceOf(TypeError);
@@ -740,8 +698,7 @@ describe("fetchCaptions", () => {
         .mockResolvedValueOnce(ok([{ text: "你好", lang: "zh-Hant-TW" }]));
       vi.spyOn(console, "warn").mockImplementation(() => {});
 
-      await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      await fetchCaptions(VIDEO_REFERENCE,
         languageTag("zh"),
       );
 
@@ -765,8 +722,7 @@ describe("fetchCaptions", () => {
         )
       );
 
-      const result = await fetchCaptions(
-        "https://youtu.be/dQw4w9WgXcQ",
+      const result = await fetchCaptions(VIDEO_REFERENCE,
         languageTag("zh")
       );
 
