@@ -137,7 +137,7 @@ describe("POST /captions", () => {
     }
   });
 
-  it("temporarily maps Video Unavailable to the existing 404 contract", async () => {
+  it("maps Video Unavailable to a bounded terminal 422 contract", async () => {
     captionTrackAcquisition.mockResolvedValue({
       kind: "video-unavailable",
       reason: "provider-video-unavailable",
@@ -145,10 +145,10 @@ describe("POST /captions", () => {
 
     const response = await post({ youtube_url: VIDEO_URL });
 
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({
-      error: "no_captions",
-      errorId: "CAPTIONS_NOT_FOUND",
+      error: "Video unavailable",
+      errorId: "VIDEO_UNAVAILABLE",
     });
   });
 

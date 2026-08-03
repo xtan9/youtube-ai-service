@@ -40,6 +40,11 @@ const expected = {
     message: "no_captions",
     errorId: "CAPTIONS_NOT_FOUND",
   },
+  "video-unavailable": {
+    status: 422,
+    message: "Video unavailable",
+    errorId: "VIDEO_UNAVAILABLE",
+  },
   "captions-failed": {
     status: 500,
     message: "Internal error",

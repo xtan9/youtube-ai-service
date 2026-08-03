@@ -5,7 +5,7 @@ Lightweight transcription microservice. Part of the YouTube AI Chat stack.
 ## Endpoints
 
 - `POST /metadata` — Extract video metadata (title, description, detected language, duration in seconds or `null`, available caption track codes) via `yt-dlp --dump-json`. Call this first so the orchestrator can pin caption + whisper language and avoid the default "pick tracks[0]" bug that produced wrong-language transcripts. `duration` lets callers fail fast on videos too long for the no-captions Whisper fallback to finish inside `VPS_TIMEOUT_MS`.
-- `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional canonical `lang` Language Tag, preserving script and region detail for Caption Track selection. Returns 200 with `{ segments, transcript, source, language, title, channelName }`; `language` remains the binary Prompt Locale. Returns 404 `{ error, errorId, requestId }` when no usable captions exist. Much cheaper than transcription — call this before `/transcribe`.
+- `POST /captions` — Fetch YouTube auto-captions for a video. Accepts an optional canonical `lang` Language Tag, preserving script and region detail for Caption Track selection. Returns 200 with `{ segments, transcript, source, language, title, channelName }`; `language` remains the binary Prompt Locale. Returns bounded 404 `{ error, errorId, requestId }` when no usable captions exist, or bounded 422 `VIDEO_UNAVAILABLE` when the valid Video Reference cannot be retrieved. Much cheaper than transcription — call this before `/transcribe`.
 - `POST /transcribe` — Transcribe a YouTube video's audio. Primary path: download audio via yt-dlp, then post to [Groq](https://groq.com)'s `whisper-large-v3`. Eligible non-quota Groq failures fall back to local `whisper-ctranslate2` for audio ≤ `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (default 180s); quota exhaustion and operational compression failures return 503. Accepts an optional canonical `lang` Language Tag, returns that canonical full tag, and forwards only its Primary Language Code to the selected backend. Omission preserves the `"auto"` response value.
 - `GET /health` — Health check (unauthenticated).
 
@@ -15,12 +15,14 @@ or let the service generate one. Error responses use a generic `{ error,
 errorId, requestId }` envelope and the same stable ID in `X-Error-ID`, while
 provider diagnostics stay in structured logs. Stable failures are `400` for
 invalid JSON/fields, `401` for missing or malformed auth, `403` for a wrong
-key, `404` for no captions, `500` for unexpected/empty results, and `503` for
-temporary transcription provider or capacity failures.
+key, `404` for no captions, `422` for a valid but unavailable Video Reference,
+`500` for unexpected/empty results, and `503` for temporary transcription
+provider or capacity failures.
 
 Caption Track acquisition is classified internally as acquired, absent, or
-video-unavailable. The last outcome remains temporarily mapped to the existing
-404 captions contract until the coordinated terminal response rollout.
+video-unavailable. `absent` maps to `404 CAPTIONS_NOT_FOUND` and is the only
+outcome that authorizes frontend Transcription fallback. `video-unavailable`
+maps to terminal `422 VIDEO_UNAVAILABLE`; it never authorizes audio acquisition.
 
 ### Contract
 

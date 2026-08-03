@@ -140,6 +140,7 @@ describe("transcription-http/v1 fixture manifest", () => {
       new Set([
         "caption-success",
         "caption-404",
+        "caption-video-unavailable",
         "caption-500",
         "transcription-success",
         "transcription-canonical-full-language-tag",
@@ -202,7 +203,12 @@ describe("service routes against transcription-http/v1 fixtures", () => {
     await expectWireResponse(response, fixture.service.response);
   });
 
-  it.each(["caption-success", "caption-404", "caption-500"])(
+  it.each([
+    "caption-success",
+    "caption-404",
+    "caption-video-unavailable",
+    "caption-500",
+  ])(
     "serves the %s caption fixture at the HTTP boundary",
     async (id) => {
       const fixture = getCase(id);
@@ -227,6 +233,11 @@ describe("service routes against transcription-http/v1 fixtures", () => {
         vi.mocked(captionsDependencies.captionTrackAcquisition).mockResolvedValue({
           kind: "absent",
           reason: "missing",
+        });
+      } else if (arrangement?.kind === "captions-video-unavailable") {
+        vi.mocked(captionsDependencies.captionTrackAcquisition).mockResolvedValue({
+          kind: "video-unavailable",
+          reason: "provider-video-unavailable",
         });
       } else {
         vi.mocked(captionsDependencies.captionTrackAcquisition).mockRejectedValue(

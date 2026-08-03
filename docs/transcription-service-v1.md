@@ -18,6 +18,12 @@ JSON, invalid YouTube URLs, invalid language hints, empty results, and the
 documented provider failures retain stable status meanings; provider details
 remain in bounded logs rather than response bodies.
 
+For `/captions`, `404 CAPTIONS_NOT_FOUND` means the available Video has no
+usable Caption Track and is the only outcome that authorizes frontend
+Transcription fallback. A valid YouTube Video Reference that cannot be
+retrieved maps to terminal `422 VIDEO_UNAVAILABLE`; unexpected acquisition
+defects remain `500 CAPTIONS_FAILED` and are never fallback-eligible.
+
 Language meanings remain endpoint-specific and stable: `/metadata` emits
 lowercase two-letter Primary Language Codes, `/captions` keeps its `language`
 field as the binary Prompt Locale derived from the returned Caption Track, and

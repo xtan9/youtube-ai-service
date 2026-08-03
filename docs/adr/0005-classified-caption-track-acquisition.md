@@ -46,10 +46,10 @@ request correlation, response shaping, and HTTP mapping. `acquired` maps to
 the existing 200 response, including `segments`, timing units, metadata,
 source, Prompt Locale as the wire `language` field, and the transitional
 derived `transcript` field. `absent` maps to the existing bounded 404
-`CAPTIONS_NOT_FOUND` response. Until the coordinated terminal rollout is
-activated, `video-unavailable` has an explicit temporary mapping to that same
-404 response so production remains wire-compatible; the internal distinction
-is nevertheless tested at the acquisition seam and route mapping.
+`CAPTIONS_NOT_FOUND` response. `video-unavailable` maps to bounded terminal
+422 `VIDEO_UNAVAILABLE`; unlike `absent`, it never authorizes Transcription
+fallback. The frontend consumer is deployed before, or atomically with, this
+service mapping.
 
 Production composition constructs one acquisition module and injects only
 that seam into the route. Acquisition tests fake only the provider adapter;
@@ -70,7 +70,7 @@ Language Tag.
   fallback policy has one owner.
 - Provider library classes and raw payloads cannot leak into routes or HTTP
   responses.
-- The terminal Video Unavailable wire contract can be activated independently
+- The terminal Video Unavailable wire contract is activated independently
   after the consumer rollout without reopening acquisition policy.
 - Tests observe behavior through the application and provider seams, so helper
   reorganization does not change the test contract.
