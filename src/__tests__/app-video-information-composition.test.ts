@@ -87,7 +87,7 @@ describe("production Video Information composition", () => {
         },
       });
     const adapters = {
-      fetchCaptions: vi.fn(),
+      captionTrackAcquisition: vi.fn(),
       videoInformationWorkflow,
       transcriptionWorkflow: vi.fn(),
     } satisfies AppAdapters;

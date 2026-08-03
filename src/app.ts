@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import { logger } from "hono/logger";
-import { fetchCaptions } from "./lib/captions.js";
+import {
+  createProductionCaptionTrackAcquisition,
+  type CaptionTrackAcquisition,
+} from "./lib/captions.js";
 import type { RuntimeConfig } from "./lib/runtime-config.js";
 import { createResourceAdmission } from "./lib/resource-limits.js";
 import type { ServiceEnv } from "./lib/request-id.js";
@@ -14,7 +17,6 @@ import {
 } from "./lib/video-information-workflow.js";
 import {
   createCaptionsRoute,
-  type CaptionsRouteDependencies,
 } from "./routes/captions.js";
 import { health } from "./routes/health.js";
 import {
@@ -23,14 +25,14 @@ import {
 import { createTranscribeRoute } from "./routes/transcribe.js";
 
 export interface AppAdapters {
-  fetchCaptions: CaptionsRouteDependencies["fetchCaptions"];
+  captionTrackAcquisition: CaptionTrackAcquisition;
   videoInformationWorkflow: VideoInformationWorkflow;
   transcriptionWorkflow: TranscriptionWorkflow;
 }
 
 function createProductionAppAdapters(config: RuntimeConfig): AppAdapters {
   return {
-    fetchCaptions,
+    captionTrackAcquisition: createProductionCaptionTrackAcquisition(),
     videoInformationWorkflow: createProductionVideoInformationWorkflow(config),
     transcriptionWorkflow: createProductionTranscriptionWorkflow(config),
   };
@@ -52,7 +54,7 @@ export function createApp(
   app.route(
     "/captions",
     createCaptionsRoute(config, admission, {
-      fetchCaptions: adapters.fetchCaptions,
+      captionTrackAcquisition: adapters.captionTrackAcquisition,
     }),
   );
   app.route(

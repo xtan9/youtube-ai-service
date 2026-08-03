@@ -18,7 +18,7 @@ const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const workflowMock = vi.fn<TranscriptionWorkflow>();
 const metadataWorkflow = vi.fn<VideoInformationWorkflow>();
 const captionsDependencies: CaptionsRouteDependencies = {
-  fetchCaptions: vi.fn(),
+  captionTrackAcquisition: vi.fn(),
 };
 
 function createRoutes(
@@ -81,7 +81,7 @@ beforeEach(() => {
       availableCaptionLanguages: [],
     },
   });
-  vi.mocked(captionsDependencies.fetchCaptions).mockReset();
+  vi.mocked(captionsDependencies.captionTrackAcquisition).mockReset();
 });
 
 describe("transcription resource limits", () => {
@@ -104,7 +104,9 @@ describe("transcription resource limits", () => {
 
   it("rate-limits each authenticated key without leaking key material", async () => {
     const { captions } = createRoutes({ rateLimitMaxRequests: 1 });
-    vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(null);
+    vi
+      .spyOn(captionsDependencies, "captionTrackAcquisition")
+      .mockResolvedValue({ kind: "absent", reason: "missing" });
 
     const first = await post(captions, { youtube_url: VIDEO_URL });
     const second = await post(captions, { youtube_url: VIDEO_URL });
@@ -171,13 +173,17 @@ describe("transcription resource limits", () => {
       config,
       createResourceAdmission(config.admission, clock),
       {
-        fetchCaptions: (_url, _lang, _requestId, signal) => {
-          receivedSignal = signal;
+        captionTrackAcquisition: (request) => {
+          receivedSignal = request.signal;
           markWorkStarted();
           return new Promise((_resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), {
-              once: true,
-            });
+            request.signal.addEventListener(
+              "abort",
+              () => reject(request.signal.reason),
+              {
+                once: true,
+              },
+            );
           });
         },
       },

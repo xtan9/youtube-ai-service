@@ -26,6 +26,8 @@ const SAFE_FIELDS = new Set([
   "requested",
   "matched",
   "availableCount",
+  "classification",
+  "outcome",
   "originalLang",
   "retryLang",
   "rejectionCount",

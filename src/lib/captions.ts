@@ -1,126 +1,146 @@
 import {
-  fetchTranscript,
-  YoutubeTranscriptDisabledError,
-  YoutubeTranscriptInvalidVideoIdError,
-  YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptNotAvailableLanguageError,
-  YoutubeTranscriptVideoUnavailableError,
-  type TranscriptResult,
-  type TranscriptSegment as YtTranscriptSegment,
-} from "youtube-transcript-plus";
-import {
   areLanguageTagsEqual,
   haveSamePrimaryLanguage,
   parseLanguageTag,
   type LanguageTag,
 } from "./language-tag.js";
 import { logServiceEvent } from "./observability.js";
+import {
+  createYoutubeTranscriptCaptionTrackProvider,
+  type CaptionTrackProvider,
+  type CaptionTrackProviderResult,
+} from "./caption-provider.js";
+import type { TimedTextSegment } from "./timed-text.js";
 import type { YouTubeVideoReference } from "./youtube-url.js";
 
-// Caption fetching must run from an IP YouTube classifies as residential —
-// datacenter IPs get caption-track URLs stripped from the watch-page
-// response, making every caption fetch look like "no transcripts available".
-// This service egresses through the Tailscale exit node (home Mac) which
-// gives youtube-transcript-plus the residential presence it needs.
+export type {
+  CaptionTrackProvider,
+  CaptionTrackProviderRequest,
+  CaptionTrackProviderResult,
+  ProviderTimedTextSegment,
+} from "./caption-provider.js";
+export type { TimedTextSegment } from "./timed-text.js";
 
 export type PromptLocale = "en" | "zh";
 
-/**
- * One transcript line with its playback timing. The frontend uses these to
- * render clickable timestamps that seek the embedded YouTube player.
- *
- * Same shape is produced by the Whisper fallback so consumers don't need to
- * branch on transcript source.
- */
-export interface TranscriptSegment {
-  readonly text: string;
-  readonly start: number; // seconds from start of video
-  readonly duration: number; // seconds
+export type CaptionTrackAbsentReason =
+  | "disabled"
+  | "missing"
+  | "language-mismatch"
+  | "empty-provider-result"
+  | "filtered-empty";
+
+export type VideoUnavailableReason =
+  | "provider-video-unavailable"
+  | "invalid-video-reference";
+
+export interface CaptionTrackAcquisitionRequest {
+  readonly videoReference: YouTubeVideoReference;
+  readonly requestedLanguage?: LanguageTag;
+  readonly requestId: string;
+  readonly signal: AbortSignal;
 }
 
-export interface CaptionResult {
-  readonly segments: readonly TranscriptSegment[];
+export type AcquiredCaptionTrack = Readonly<{
+  readonly kind: "acquired";
+  readonly segments: readonly TimedTextSegment[];
   readonly source: "auto_captions";
-  readonly language: PromptLocale;
-  // `null` not `""`: the distinction between "YouTube returned empty" and
-  // "we never got videoDetails" matters to the frontend UI, and forcing
-  // callers to handle the unknown case at the type level prevents the
-  // silent-empty-string bug class.
+  readonly promptLocale: PromptLocale;
   readonly title: string | null;
   readonly channelName: string | null;
-}
+}>;
 
-// `youtube-transcript-plus` already decodes the named XML entities
-// (`&amp; &lt; &gt; &quot; &apos; &#39;`) once, but YouTube sometimes
-// emits them double-encoded (`&amp;#39;` survives the first pass as
-// `&#39;`) and the library doesn't cover hex-numeric (`&#x27;`) or
-// arbitrary `&#NNN;` decimal entities at all. Run an iterative pass
-// here so the segment text we hand callers is a clean Unicode string —
-// otherwise React renders the literal `&` and users see "I&#39;m"
-// where they should see "I'm".
-//
-// Bounded to two passes total: enough to unwrap `&amp;<entity>;`
-// without risk of an infinite loop on adversarial input that happens
-// to keep producing entity-shaped substrings. Whisper output is plain
-// text so this only matters on the captions path.
+export type CaptionTrackAbsent = Readonly<{
+  readonly kind: "absent";
+  readonly reason: CaptionTrackAbsentReason;
+}>;
+
+export type VideoUnavailable = Readonly<{
+  readonly kind: "video-unavailable";
+  readonly reason: VideoUnavailableReason;
+}>;
+
+export type CaptionTrackAcquisitionOutcome =
+  | AcquiredCaptionTrack
+  | CaptionTrackAbsent
+  | VideoUnavailable;
+
+export type CaptionTrackAcquisition = (
+  request: CaptionTrackAcquisitionRequest,
+) => Promise<CaptionTrackAcquisitionOutcome>;
+
+const MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH = 64;
+const MAX_DIAGNOSTIC_COUNT = 1_000;
+const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+const MAX_UNICODE_CODEPOINT = 0x10ffff;
+
 const NAMED_XML_ENTITIES: Readonly<Record<string, string>> = {
   "&amp;": "&",
   "&lt;": "<",
   "&gt;": ">",
   "&quot;": '"',
   "&apos;": "'",
-  "&nbsp;": " ",
+  "&nbsp;": "\u00a0",
 };
 
-// `String.fromCodePoint` throws RangeError for values > 0x10FFFF (e.g.
-// adversarial `&#999999999999;`). A defensive decoder must never throw —
-// a single malformed entity would otherwise crash the whole captions
-// fetch. Return the original match unchanged when the codepoint is out
-// of range so downstream sees the raw entity instead of a 500.
-const MAX_UNICODE_CODEPOINT = 0x10ffff;
-function safeFromCodePoint(cp: number, originalMatch: string): string {
-  if (!Number.isFinite(cp) || cp < 0 || cp > MAX_UNICODE_CODEPOINT) {
-    return originalMatch;
-  }
-  try {
-    return String.fromCodePoint(cp);
-  } catch {
-    return originalMatch;
-  }
-}
-
-function decodeEntitiesOnce(text: string): string {
-  return text
-    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (m) => NAMED_XML_ENTITIES[m] ?? m)
-    .replace(/&#x([0-9a-fA-F]+);/g, (m, hex) =>
-      safeFromCodePoint(parseInt(hex, 16), m)
-    )
-    .replace(/&#(\d+);/g, (m, dec) =>
-      safeFromCodePoint(parseInt(dec, 10), m)
-    );
-}
-
-export function decodeCaptionEntities(text: string): string {
-  const once = decodeEntitiesOnce(text);
-  if (once === text) return once;
-  return decodeEntitiesOnce(once);
-}
-
-// youtube-transcript-plus matches a requested `lang` against the provider's
-// track code with strict equality. When the library reports a language miss,
-// `availableLangs` contains the provider's actual track tokens. Parse those
-// tokens into canonical identities for selection, but retain each bounded raw
-// token so a strict retry uses exactly the spelling the provider advertised.
-// A specific request must not downgrade to a sibling provider track.
-// Provider spelling is never exposed beyond this adapter.
-const MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH = 64;
-
-type ProviderCaptionTrack = Readonly<{
+type ProviderRetryTrack = Readonly<{
   readonly languageTag: LanguageTag;
   readonly rawToken: string;
 }>;
 
-function parseProviderCaptionTrack(input: unknown): ProviderCaptionTrack | null {
+function boundDiagnosticCount(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(0, Math.trunc(value)), MAX_DIAGNOSTIC_COUNT);
+}
+
+function safeErrorClass(error: unknown): string {
+  if (!(error instanceof Error)) return "unknown";
+  return SAFE_ERROR_NAME_PATTERN.test(error.constructor.name)
+    ? error.constructor.name
+    : "unknown";
+}
+
+function providerCorrelation(
+  request: CaptionTrackAcquisitionRequest,
+): { readonly requestId: string; readonly videoId: string } {
+  return {
+    requestId: request.requestId,
+    videoId: request.videoReference.videoId,
+  };
+}
+
+function absent(
+  request: CaptionTrackAcquisitionRequest,
+  reason: CaptionTrackAbsentReason,
+): CaptionTrackAbsent {
+  request.signal.throwIfAborted();
+  const outcome = Object.freeze({ kind: "absent" as const, reason });
+  logServiceEvent("info", "captions.absent", {
+    ...providerCorrelation(request),
+    outcome: "absent",
+    classification: reason,
+  });
+  return outcome;
+}
+
+function unavailable(
+  request: CaptionTrackAcquisitionRequest,
+  reason: VideoUnavailableReason,
+): VideoUnavailable {
+  request.signal.throwIfAborted();
+  const outcome = Object.freeze({
+    kind: "video-unavailable" as const,
+    reason,
+  });
+  logServiceEvent("info", "captions.video_unavailable", {
+    ...providerCorrelation(request),
+    outcome: "video-unavailable",
+    classification: reason,
+  });
+  return outcome;
+}
+
+function parseProviderLanguageToken(input: unknown): ProviderRetryTrack | null {
   if (
     typeof input !== "string" ||
     input.length === 0 ||
@@ -141,18 +161,18 @@ function parseProviderCaptionTrack(input: unknown): ProviderCaptionTrack | null 
 function selectProviderRetryTrack(
   requested: LanguageTag,
   available: readonly unknown[],
-): ProviderCaptionTrack | null {
+): ProviderRetryTrack | null {
   const tracks = available
-    .map(parseProviderCaptionTrack)
-    .filter((track): track is ProviderCaptionTrack => track !== null);
+    .map(parseProviderLanguageToken)
+    .filter((track): track is ProviderRetryTrack => track !== null);
 
   const exact = tracks.find((track) =>
     areLanguageTagsEqual(track.languageTag, requested),
   );
   if (exact) return exact;
 
-  // Only a bare primary tag permits a same-primary fallback. A specific
-  // script, region, or variant request must remain an exact identity match.
+  // A specific script, region, or variant request is an exact identity
+  // request. Only a bare primary tag may select the first same-primary track.
   if (requested.tag !== requested.primaryLanguageCode) return null;
 
   return (
@@ -162,182 +182,208 @@ function selectProviderRetryTrack(
   );
 }
 
-// Errors the library raises for "this video genuinely has no captions" —
-// expected outcomes that callers handle with a Whisper fallback. Anything
-// else (TypeError from schema drift, fetch abort, parse failure) is an
-// operational problem that should surface, not silently degrade to paid
-// transcription on every request.
-const EXPECTED_NO_CAPTIONS_ERRORS = [
-  YoutubeTranscriptDisabledError,
-  YoutubeTranscriptNotAvailableError,
-  YoutubeTranscriptNotAvailableLanguageError,
-  YoutubeTranscriptVideoUnavailableError,
-  YoutubeTranscriptInvalidVideoIdError,
-] as const;
-
-export function isExpectedNoCaptions(err: unknown): boolean {
-  return EXPECTED_NO_CAPTIONS_ERRORS.some((cls) => err instanceof cls);
+function safeFromCodePoint(codePoint: number, original: string): string {
+  // Unicode scalar values exclude the surrogate range even though
+  // String.fromCodePoint accepts it on some runtimes.
+  if (
+    !Number.isFinite(codePoint) ||
+    codePoint < 0 ||
+    codePoint > MAX_UNICODE_CODEPOINT ||
+    (codePoint >= 0xd800 && codePoint <= 0xdfff)
+  ) {
+    return original;
+  }
+  try {
+    return String.fromCodePoint(codePoint);
+  } catch {
+    return original;
+  }
 }
 
-// zh-CN and zh-TW both map to "zh" — the downstream prompt templates use
-// a single "zh" locale. Unknown locales default to "en" because that's
-// the only prompt template guaranteed to exist; the warning is so we can
-// audit miss rate and decide whether to add ja/ko/etc.
-export function pickLocale(
-  segments: readonly YtTranscriptSegment[],
-  videoId?: string,
-  requestId?: string
+function decodeEntitiesOnce(text: string): string {
+  return text
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (match) =>
+      NAMED_XML_ENTITIES[match] ?? match,
+    )
+    .replace(/&#x([0-9a-fA-F]+);/g, (match, hex: string) =>
+      safeFromCodePoint(parseInt(hex, 16), match),
+    )
+    .replace(/&#(\d+);/g, (match, decimal: string) =>
+      safeFromCodePoint(parseInt(decimal, 10), match),
+    );
+}
+
+function decodeCaptionEntities(text: string): string {
+  const once = decodeEntitiesOnce(text);
+  return once === text ? once : decodeEntitiesOnce(once);
+}
+
+function selectPromptLocale(
+  request: CaptionTrackAcquisitionRequest,
+  languageTag: string | undefined,
 ): PromptLocale {
-  const rawLang = segments[0]?.lang;
-  const parsedTag = parseLanguageTag(rawLang);
-  if (!parsedTag.ok) {
+  const parsed = parseLanguageTag(languageTag);
+  if (!parsed.ok) {
     logServiceEvent("warn", "captions.unknown_locale", {
-      requestId,
-      videoId,
-      reason: rawLang === undefined ? "missing" : parsedTag.reason,
+      ...providerCorrelation(request),
+      reason: languageTag === undefined ? "missing" : parsed.reason,
     });
     return "en";
   }
 
-  const { languageTag } = parsedTag;
-  if (languageTag.primaryLanguageCode === "zh") return "zh";
-  if (languageTag.primaryLanguageCode !== "en") {
+  if (parsed.languageTag.primaryLanguageCode === "zh") return "zh";
+  if (parsed.languageTag.primaryLanguageCode !== "en") {
     logServiceEvent("warn", "captions.unknown_locale", {
-      requestId,
-      videoId,
-      lang: languageTag.tag,
+      ...providerCorrelation(request),
+      lang: parsed.languageTag.tag,
     });
   }
-
   return "en";
 }
 
-/**
- * Fetch auto-captions for one validated YouTube Video Reference.
- *
- * When `lang` is provided, forwards it to the library so the specific
- * caption track is selected instead of `tracks[0]` (which YouTube can
- * order arbitrarily — the bug that produced Arabic for French videos).
- *
- * Returns `null` for the expected "no captions available" outcome (the
- * frontend falls back to Whisper transcription). Throws on unexpected
- * library or network failures so the route can return 5xx — a blanket
- * `null` here would trigger a silent Whisper fallback on every bug,
- * hiding real problems behind compute bills.
- */
-export async function fetchCaptions(
-  videoReference: YouTubeVideoReference,
-  lang?: LanguageTag,
-  requestId?: string,
-  signal?: AbortSignal,
-): Promise<CaptionResult | null> {
-  const videoId = videoReference.videoId;
-
-  let result: TranscriptResult;
-  try {
-    const response = await fetchTranscript(videoId, {
-      videoDetails: true,
-      ...(lang ? { lang: lang.tag } : {}),
-      ...(signal ? { signal } : {}),
+function acquiredFromProviderResult(
+  request: CaptionTrackAcquisitionRequest,
+  result: Extract<CaptionTrackProviderResult, { readonly kind: "success" }>,
+): CaptionTrackAcquisitionOutcome {
+  request.signal.throwIfAborted();
+  if (result.segments.length === 0) {
+    logServiceEvent("warn", "captions.empty_provider_result", {
+      ...providerCorrelation(request),
+      errorId: "CAPTION_EMPTY_PROVIDER_RESULT",
+      segmentCount: 0,
     });
-    result = response as TranscriptResult;
-  } catch (err) {
-    signal?.throwIfAborted();
-    // A strict provider miss may still have a canonical exact track (or,
-    // for a bare primary request only, a same-primary track) in the ordered
-    // available list. Retry once with that track's exact provider token.
-    if (lang && err instanceof YoutubeTranscriptNotAvailableLanguageError) {
-      const availableLangs = Array.isArray(err.availableLangs)
-        ? err.availableLangs
-        : [];
-      const matched = selectProviderRetryTrack(lang, availableLangs);
-      if (!matched) return null;
-      logServiceEvent("warn", "captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG", {
-        errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
-        requestId,
-        videoId,
-        requested: lang.tag,
-        matched: matched.rawToken,
-        availableCount: availableLangs.length,
-      });
-      try {
-        const retryResponse = await fetchTranscript(videoId, {
-          videoDetails: true,
-          lang: matched.rawToken,
-          ...(signal ? { signal } : {}),
-        });
-        result = retryResponse as TranscriptResult;
-      } catch (retryErr) {
-        signal?.throwIfAborted();
-        if (isExpectedNoCaptions(retryErr)) return null;
-        logServiceEvent("error", "captions.CAPTION_UNEXPECTED_FAILURE", {
-          errorId: "CAPTION_UNEXPECTED_FAILURE",
-          requestId,
-          videoId,
-          errorClass:
-            retryErr instanceof Error
-              ? retryErr.constructor.name
-              : typeof retryErr,
-          originalLang: lang.tag,
-          retryLang: matched.rawToken,
-        });
-        throw retryErr;
-      }
-    } else if (isExpectedNoCaptions(err)) {
-      return null;
-    } else {
-      logServiceEvent("error", "captions.CAPTION_UNEXPECTED_FAILURE", {
-        errorId: "CAPTION_UNEXPECTED_FAILURE",
-        requestId,
-        videoId,
-        errorClass: err instanceof Error ? err.constructor.name : typeof err,
-      });
-      throw err;
-    }
+    return absent(request, "empty-provider-result");
   }
 
-  const { segments: ytSegments, videoDetails } = result;
-  if (!ytSegments || ytSegments.length === 0) {
-    // Library reported success but handed back no segments. Usually this
-    // means the video genuinely has no captions, but a YouTube schema
-    // shift ("segments array now lives under .tracks") could hit this
-    // path silently. Log so a rising rate is detectable before a wave
-    // of unnecessary Whisper fallbacks hits the compute bill.
-    logServiceEvent("warn", "captions.empty_segments", {
-      errorId: "CAPTION_EMPTY_SEGMENTS",
-      requestId,
-      videoId,
-    });
-    return null;
-  }
-
-  // Keep only segments whose text contains visible characters. A track of
-  // pure-whitespace lines (music-cue videos) yields no useful transcript
-  // and should fall back to Whisper rather than persist an empty string
-  // through the pipeline.
-  const segments: TranscriptSegment[] = ytSegments
-    .filter((s) => s.text.trim().length > 0)
-    .map((s) => ({
-      text: decodeCaptionEntities(s.text),
-      start: s.offset,
-      duration: s.duration,
-    }));
+  const segments = result.segments
+    .map((segment) => ({
+      text: decodeCaptionEntities(segment.text),
+      start: segment.start,
+      duration: segment.duration,
+    }))
+    .filter((segment) => segment.text.trim().length > 0)
+    .map((segment) => Object.freeze(segment));
 
   if (segments.length === 0) {
-    logServiceEvent("warn", "captions.empty_transcript", {
-      errorId: "CAPTION_EMPTY_TRANSCRIPT",
-      requestId,
-      videoId,
-      segmentCount: ytSegments.length,
+    logServiceEvent("warn", "captions.filtered_empty", {
+      ...providerCorrelation(request),
+      errorId: "CAPTION_SEGMENTS_FILTERED_EMPTY",
+      segmentCount: boundDiagnosticCount(result.segments.length),
     });
-    return null;
+    return absent(request, "filtered-empty");
   }
 
+  request.signal.throwIfAborted();
+  return Object.freeze({
+    kind: "acquired" as const,
+    segments: Object.freeze(segments),
+    source: "auto_captions" as const,
+    promptLocale: selectPromptLocale(request, result.languageTag),
+    title: result.title,
+    channelName: result.channelName,
+  });
+}
+
+function mapProviderResult(
+  request: CaptionTrackAcquisitionRequest,
+  result: CaptionTrackProviderResult,
+): CaptionTrackAcquisitionOutcome {
+  request.signal.throwIfAborted();
+  switch (result.kind) {
+    case "success":
+      return acquiredFromProviderResult(request, result);
+    case "absent":
+      return absent(request, result.reason);
+    case "unavailable":
+      return unavailable(request, result.reason);
+    default: {
+      const _exhaustive: never = result;
+      void _exhaustive;
+      throw new Error("Caption Track provider returned an unknown outcome");
+    }
+  }
+}
+
+function requestedProviderLanguage(
+  request: CaptionTrackAcquisitionRequest,
+  language: string | undefined,
+): {
+  readonly videoId: string;
+  readonly signal: AbortSignal;
+  readonly language?: string;
+} {
   return {
-    segments,
-    source: "auto_captions",
-    language: pickLocale(ytSegments, videoId, requestId),
-    title: videoDetails?.title ?? null,
-    channelName: videoDetails?.author ?? null,
+    videoId: request.videoReference.videoId,
+    ...(language !== undefined ? { language } : {}),
+    signal: request.signal,
   };
+}
+
+export function createCaptionTrackAcquisition(
+  provider: CaptionTrackProvider,
+): CaptionTrackAcquisition {
+  return async (request) => {
+    request.signal.throwIfAborted();
+    const correlation = providerCorrelation(request);
+    logServiceEvent("info", "captions.acquire", {
+      ...correlation,
+      lang: request.requestedLanguage?.tag,
+    });
+
+    try {
+      let result = await provider(
+        requestedProviderLanguage(request, request.requestedLanguage?.tag),
+      );
+      request.signal.throwIfAborted();
+
+      if (
+        result.kind === "absent" &&
+        result.reason === "language-mismatch" &&
+        request.requestedLanguage
+      ) {
+        const availableLanguages = result.availableLanguages ?? [];
+        const matched = selectProviderRetryTrack(
+          request.requestedLanguage,
+          availableLanguages,
+        );
+        if (!matched) {
+          logServiceEvent("info", "captions.language_mismatch", {
+            ...correlation,
+            lang: request.requestedLanguage.tag,
+            availableCount: boundDiagnosticCount(availableLanguages.length),
+          });
+          return absent(request, "language-mismatch");
+        }
+
+        request.signal.throwIfAborted();
+        logServiceEvent("warn", "captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG", {
+          ...correlation,
+          errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
+          requested: request.requestedLanguage.tag,
+          matched: matched.rawToken,
+          availableCount: boundDiagnosticCount(availableLanguages.length),
+        });
+        result = await provider(
+          requestedProviderLanguage(request, matched.rawToken),
+        );
+        request.signal.throwIfAborted();
+      }
+
+      return mapProviderResult(request, result);
+    } catch (error) {
+      request.signal.throwIfAborted();
+      logServiceEvent("error", "captions.CAPTION_UNEXPECTED_FAILURE", {
+        ...correlation,
+        errorId: "CAPTION_UNEXPECTED_FAILURE",
+        errorClass: safeErrorClass(error),
+      });
+      throw error;
+    }
+  };
+}
+
+export function createProductionCaptionTrackAcquisition(): CaptionTrackAcquisition {
+  return createCaptionTrackAcquisition(
+    createYoutubeTranscriptCaptionTrackProvider(),
+  );
 }

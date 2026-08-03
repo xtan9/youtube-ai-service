@@ -6,7 +6,7 @@ import {
   compressForGroq,
 } from "./audio-compress.js";
 import type { AudioCompressKind } from "./audio-compress.js";
-import type { TranscriptSegment } from "./captions.js";
+import type { TimedTextSegment } from "./timed-text.js";
 import { getLanguageAnchorPrompt } from "./language-prompt.js";
 import type { GroqConfig } from "./runtime-config.js";
 import type { PrimaryLanguageCode } from "./language-tag.js";
@@ -89,7 +89,7 @@ async function transcribeWithGroq(
   audioPath: string,
   lang?: PrimaryLanguageCode,
   signal?: AbortSignal,
-): Promise<{ segments: TranscriptSegment[]; language: string }> {
+): Promise<{ segments: TimedTextSegment[]; language: string }> {
   const { apiKey, model, timeoutMs } = config;
   const workSignal = signal ?? new AbortController().signal;
   if (!apiKey) {
@@ -219,7 +219,7 @@ async function transcribeWithGroq(
     // Drop empty / whitespace-only segments (Groq occasionally emits a
     // trailing empty-text segment for end-of-audio silence — same defensive
     // behavior parseWhisperJson already applies).
-    const segments: TranscriptSegment[] = [];
+    const segments: TimedTextSegment[] = [];
     for (const s of parsed.data.segments) {
       const text = s.text.trim();
       if (!text) continue;

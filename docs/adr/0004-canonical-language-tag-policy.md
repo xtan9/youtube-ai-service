@@ -39,8 +39,9 @@ Review searches must continue to show that:
   carry their own regexes, sentinel collections, alias tables, or primary-tag
   splitting.
 - Provider transport pairing (`availableLangs` and the bounded raw token) is
-  confined to `src/lib/captions.ts`; yt-dlp language values are parsed at their
-  adapter boundary and only canonical values escape.
+  confined to the Caption Track provider/acquisition boundary in
+  `src/lib/caption-provider.ts` and `src/lib/captions.ts`; yt-dlp language
+  values are parsed at their adapter boundary and only canonical values escape.
 
 The public tests should observe Language Tag semantics, consumer arguments, or
 HTTP responses. They should not import parser internals, conversion data, or

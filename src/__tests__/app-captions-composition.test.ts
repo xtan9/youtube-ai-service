@@ -10,7 +10,7 @@ vi.mock("youtube-transcript-plus", async () => {
   return { ...actual, fetchTranscript: mockedFetchTranscript };
 });
 
-import { createApp } from "../app.js";
+import { createApp, type AppAdapters } from "../app.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
 
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -62,5 +62,29 @@ describe("production Caption Track composition", () => {
         signal: expect.any(AbortSignal),
       }),
     );
+  });
+
+  it("uses an injected acquisition seam without allowing a provider bypass", async () => {
+    const captionTrackAcquisition = vi.fn().mockResolvedValue({
+      kind: "acquired" as const,
+      segments: [{ text: "injected", start: 0, duration: 1 }],
+      source: "auto_captions" as const,
+      promptLocale: "en" as const,
+      title: null,
+      channelName: null,
+    });
+    const adapters = {
+      captionTrackAcquisition,
+      videoInformationWorkflow: vi.fn(),
+      transcriptionWorkflow: vi.fn(),
+    } satisfies AppAdapters;
+    const app = createApp(createTestRuntimeConfig(), adapters);
+
+    const result = await captions(app);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ transcript: "injected" });
+    expect(captionTrackAcquisition).toHaveBeenCalledOnce();
+    expect(mockedFetchTranscript).not.toHaveBeenCalled();
   });
 });

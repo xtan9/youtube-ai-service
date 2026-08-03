@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import fixturesJson from "../../test-fixtures/transcription-contract/v1/cases.json";
 import { createApp } from "../app.js";
 import type { CaptionsRouteDependencies } from "../routes/captions.js";
-import type { CaptionResult, TranscriptSegment } from "../lib/captions.js";
+import type { CaptionTrackAcquisition } from "../lib/captions.js";
+import type { TimedTextSegment } from "../lib/timed-text.js";
 import {
   detectLanguage,
   extractAvailableCaptions,
@@ -59,12 +60,12 @@ const fixtures = fixturesJson as unknown as ContractFixtures;
 const VALID_KEY = "fixture-key";
 const testConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 const captionsDependencies: CaptionsRouteDependencies = {
-  fetchCaptions: vi.fn(),
+  captionTrackAcquisition: vi.fn<CaptionTrackAcquisition>(),
 };
 const videoInformationWorkflow = vi.fn<VideoInformationWorkflow>();
 const workflow = vi.fn<TranscriptionWorkflow>();
 const app = createApp(testConfig, {
-  fetchCaptions: captionsDependencies.fetchCaptions,
+  captionTrackAcquisition: captionsDependencies.captionTrackAcquisition,
   videoInformationWorkflow,
   transcriptionWorkflow: workflow,
 });
@@ -171,7 +172,7 @@ describe("transcription-http/v1 fixture manifest", () => {
 describe("service routes against transcription-http/v1 fixtures", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(captionsDependencies.fetchCaptions).mockReset();
+    vi.mocked(captionsDependencies.captionTrackAcquisition).mockReset();
     videoInformationWorkflow.mockReset();
     workflow.mockReset().mockResolvedValue({ ok: true, segments: [] });
   });
@@ -207,13 +208,28 @@ describe("service routes against transcription-http/v1 fixtures", () => {
       const fixture = getCase(id);
       const arrangement = fixture.service?.arrange;
       if (arrangement?.kind === "captions") {
-        vi.mocked(captionsDependencies.fetchCaptions).mockResolvedValue(
-          arrangement.value as CaptionResult
-        );
+        const value = arrangement.value as {
+          segments: readonly TimedTextSegment[];
+          source: "auto_captions";
+          language: "en" | "zh";
+          title: string | null;
+          channelName: string | null;
+        };
+        vi.mocked(captionsDependencies.captionTrackAcquisition).mockResolvedValue({
+          kind: "acquired",
+          segments: value.segments,
+          source: value.source,
+          promptLocale: value.language,
+          title: value.title,
+          channelName: value.channelName,
+        });
       } else if (arrangement?.kind === "captions-null") {
-        vi.mocked(captionsDependencies.fetchCaptions).mockResolvedValue(null);
+        vi.mocked(captionsDependencies.captionTrackAcquisition).mockResolvedValue({
+          kind: "absent",
+          reason: "missing",
+        });
       } else {
-        vi.mocked(captionsDependencies.fetchCaptions).mockRejectedValue(
+        vi.mocked(captionsDependencies.captionTrackAcquisition).mockRejectedValue(
           new Error("fixture provider failure")
         );
       }
@@ -256,7 +272,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
       );
     }
 
-    expect(captionsDependencies.fetchCaptions).not.toHaveBeenCalled();
+    expect(captionsDependencies.captionTrackAcquisition).not.toHaveBeenCalled();
     expect(workflow).not.toHaveBeenCalled();
   });
 
@@ -268,7 +284,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
   ])("serves the %s transcription fixture at the HTTP boundary", async (id) => {
     const fixture = getCase(id);
     const arrangement = fixture.service?.arrange;
-    const segments = (arrangement?.value ?? []) as TranscriptSegment[];
+    const segments = (arrangement?.value ?? []) as TimedTextSegment[];
     workflow.mockResolvedValue(
       segments.length > 0
         ? { ok: true, segments }

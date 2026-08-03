@@ -18,6 +18,10 @@ invalid JSON/fields, `401` for missing or malformed auth, `403` for a wrong
 key, `404` for no captions, `500` for unexpected/empty results, and `503` for
 temporary transcription provider or capacity failures.
 
+Caption Track acquisition is classified internally as acquired, absent, or
+video-unavailable. The last outcome remains temporarily mapped to the existing
+404 captions contract until the coordinated terminal response rollout.
+
 ### Contract
 
 The authenticated endpoint behavior follows the reviewed
