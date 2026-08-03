@@ -1,7 +1,11 @@
 import type { Hono } from "hono";
 import { z } from "zod";
 import { extractVideoId, type CaptionResult } from "../lib/captions.js";
-import { languageCodeSchema, youtubeUrlSchema } from "../lib/youtube-url.js";
+import {
+  parseLanguageTag,
+  type LanguageTag,
+} from "../lib/language-tag.js";
+import { youtubeUrlSchema } from "../lib/youtube-url.js";
 import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
@@ -17,7 +21,7 @@ type CaptionsRouteConfig = DataRouteConfig;
 export interface CaptionsRouteDependencies {
   fetchCaptions(
     youtubeUrl: string,
-    lang: string | undefined,
+    lang: LanguageTag | undefined,
     requestId: string,
     signal: AbortSignal,
   ): Promise<CaptionResult | null>;
@@ -32,12 +36,10 @@ export function createCaptionsRoute(
 
   const requestSchema = z.object({
     youtube_url: youtubeUrlSchema,
-    // Optional ISO 639-1 or BCP-47 code. Passed through to
-    // `youtube-transcript-plus` so the library selects a specific caption
-    // track instead of the arbitrarily-ordered `tracks[0]`. Regex-constrained
-    // at the schema boundary so values like `--help` or `"; rm -rf /"` are
-    // rejected here instead of producing confusing downstream CLI errors.
-    lang: languageCodeSchema.optional(),
+    // Keep text intake separate from the canonical language policy. This
+    // lets the policy classify malformed, sentinel, and unsupported-primary
+    // values into the same bounded 400 response before provider work.
+    lang: z.string().optional(),
   });
 
   captions.post("/", async (c) => {
@@ -45,6 +47,14 @@ export function createCaptionsRoute(
     if (!intake.ok) return intake.response;
 
     const { youtube_url, lang } = intake.data;
+    let languageTag: LanguageTag | undefined;
+    if (lang !== undefined) {
+      const parsedLanguageTag = parseLanguageTag(lang);
+      if (!parsedLanguageTag.ok) {
+        return respondWithOperationalOutcome(c, "invalid-request");
+      }
+      languageTag = parsedLanguageTag.languageTag;
+    }
 
     // Log only the videoId, never the full URL. YouTube URLs are unlikely
     // to contain secrets in practice, but the zod schema above only
@@ -56,11 +66,11 @@ export function createCaptionsRoute(
       logServiceEvent("info", "captions.fetch", {
         requestId: c.get("requestId"),
         videoId,
-        lang,
+        lang: languageTag?.tag,
       });
       const result = await dependencies.fetchCaptions(
         youtube_url,
-        lang,
+        languageTag,
         c.get("requestId"),
         c.get("workSignal"),
       );

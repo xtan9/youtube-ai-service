@@ -50,22 +50,3 @@ export const youtubeUrlSchema = z
   .refine(isYoutubeUrl, {
     message: "URL must be a YouTube URL",
   });
-
-// BCP-47 primary subtag + optional region/script (e.g. "en", "fra", "en-US",
-// "zh-Hans", "zh-Hant-TW"). Pinned at the schema boundary so arbitrary
-// strings ("--model", " ; rm -rf /", emoji) never reach child_process.
-// execFile with an argv array already blocks shell injection — this
-// regex blocks the narrower class of "lang that looks like a CLI flag"
-// that would produce confusing whisper errors instead of clean rejection.
-const LANGUAGE_SENTINELS = new Set(["und", "zxx", "mul", "mis"]);
-
-export const languageCodeSchema = z
-  .string()
-  .regex(
-    /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/,
-    "lang must be a BCP-47 tag (e.g. en, fr, zh-Hans)"
-  )
-  .refine(
-    (value) => !LANGUAGE_SENTINELS.has(value.toLowerCase().split("-")[0]),
-    "lang must not be an undetermined or non-linguistic sentinel"
-  );

@@ -145,20 +145,22 @@ describe("POST /captions", () => {
     expect(res.status).toBe(500);
   });
 
-  it("forwards `lang` to fetchCaptions when provided", async () => {
-    // Validates the critical handoff: without this, lang is accepted by
-    // the zod schema but silently dropped before reaching the library,
-    // leaving the `tracks[0]` bug unfixed.
+  it("forwards the canonical Language Tag to fetchCaptions when provided", async () => {
+    // The captions adapter needs the full canonical identity so it can
+    // distinguish an exact request from a primary-only fallback request.
     const spy = vi
       .spyOn(captionsDependencies, "fetchCaptions")
       .mockResolvedValue(null);
     await post({
       youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-      lang: "fr",
+      lang: "fra-CA",
     });
     expect(spy).toHaveBeenCalledWith(
       expect.any(String),
-      "fr",
+      {
+        tag: "fr-CA",
+        primaryLanguageCode: "fr",
+      },
       expect.any(String),
       expect.any(AbortSignal),
     );
@@ -189,6 +191,9 @@ describe("POST /captions", () => {
     ["a", "too short"],
     ["", "empty string"],
     [" en", "leading whitespace"],
+    ["auto", "automatic-language sentinel"],
+    ["abc", "unsupported primary language"],
+    ["en-u-ca-gregory", "extension-bearing tag"],
   ])("rejects lang=%s (%s) with 400", async (lang) => {
     // Argv-based execFile blocks shell injection, but a lang like "--model"
     // would reach whisper and produce confusing CLI errors that surface
@@ -199,6 +204,7 @@ describe("POST /captions", () => {
       lang,
     });
     expect(res.status).toBe(400);
+    expect(captionsDependencies.fetchCaptions).not.toHaveBeenCalled();
   });
 
   it.each([
