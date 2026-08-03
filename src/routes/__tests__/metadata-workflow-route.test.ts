@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createMetadataRoute,
-  type MetadataRouteDependencies,
-} from "../metadata.js";
+import { createMetadataRoute } from "../metadata.js";
 import type {
   VideoInformationWorkflow,
   VideoInformationWorkflowInput,
@@ -15,16 +12,13 @@ const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const config = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
 
 const workflow = vi.fn<VideoInformationWorkflow>();
-const dependencies: MetadataRouteDependencies = {
-  videoInformationWorkflow: workflow,
-};
 const metadata = createMetadataRoute(
   config,
   createResourceAdmission(config.admission),
-  dependencies,
+  workflow,
 );
 
-function post(body: unknown) {
+function post(body: unknown, init: RequestInit = {}) {
   return metadata.request("/", {
     method: "POST",
     headers: {
@@ -33,6 +27,7 @@ function post(body: unknown) {
       "X-Request-ID": "route-request-id",
     },
     body: JSON.stringify(body),
+    ...init,
   });
 }
 
@@ -88,7 +83,39 @@ describe("metadata route workflow seam", () => {
     });
   });
 
-  it("preserves cancellation and maps unexpected workflow defects generically", async () => {
+  it("propagates request cancellation unchanged through the workflow seam", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const controller = new AbortController();
+    const cancellation = new DOMException("request stopped", "AbortError");
+    let markWorkflowStarted!: () => void;
+    const workflowStarted = new Promise<void>((resolve) => {
+      markWorkflowStarted = resolve;
+    });
+    workflow.mockImplementation(async ({ signal }) => {
+      markWorkflowStarted();
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+      });
+      throw new Error("unreachable");
+    });
+
+    const responsePromise = post(
+      { youtube_url: VIDEO_URL },
+      { signal: controller.signal },
+    );
+    await workflowStarted;
+    controller.abort(cancellation);
+
+    const response = await responsePromise;
+    expect(response.status).toBe(500);
+    expect(response.headers.get("X-Error-ID")).toBeNull();
+    expect(await response.text()).toBe("Internal Server Error");
+    expect(errorSpy).toHaveBeenCalledWith(cancellation);
+  });
+
+  it("maps unexpected workflow defects generically without provider details", async () => {
     const defect = new Error("private workflow defect");
     workflow.mockRejectedValue(defect);
 

@@ -16,14 +16,10 @@ import {
 
 type MetadataRouteConfig = DataRouteConfig;
 
-export interface MetadataRouteDependencies {
-  readonly videoInformationWorkflow: VideoInformationWorkflow;
-}
-
 export function createMetadataRoute(
   config: MetadataRouteConfig,
   admission: ResourceAdmission,
-  dependencies: MetadataRouteDependencies,
+  workflow: VideoInformationWorkflow,
 ): Hono<ServiceEnv> {
   const metadata = createDataRoute("metadata", config, admission);
 
@@ -39,7 +35,7 @@ export function createMetadataRoute(
     const videoId = extractVideoId(youtube_url) ?? "unknown";
 
     try {
-      const outcome = await dependencies.videoInformationWorkflow({
+      const outcome = await workflow({
         youtubeUrl: youtube_url,
         signal: c.get("workSignal"),
         correlation: {

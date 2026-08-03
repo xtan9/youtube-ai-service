@@ -5,8 +5,9 @@ vi.mock("child_process", () => ({
 }));
 
 import { execFile } from "child_process";
-import { createApp } from "../app.js";
+import { createApp, type AppAdapters } from "../app.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
+import type { VideoInformationWorkflow } from "../lib/video-information-workflow.js";
 
 const mockedExecFile = vi.mocked(execFile);
 const VALID_KEY = "composition-key";
@@ -66,6 +67,43 @@ describe("production Video Information composition", () => {
       availableCaptions: ["fr", "en"],
     });
     expect(mockedExecFile).toHaveBeenCalledOnce();
+  });
+
+  it("routes metadata through the injected workflow without exposing a raw fetch seam", async () => {
+    const videoInformationWorkflow = vi
+      .fn<VideoInformationWorkflow>()
+      .mockResolvedValue({
+        ok: true,
+        videoInformation: {
+          title: "Workflow-owned title",
+          description: "Workflow-owned description",
+          durationSeconds: null,
+          languageHint: "en",
+          availableCaptionLanguages: ["en"],
+        },
+      });
+    const adapters = {
+      fetchCaptions: vi.fn(),
+      videoInformationWorkflow,
+      transcriptionWorkflow: vi.fn(),
+    } satisfies AppAdapters;
+
+    const app = createApp(
+      createTestRuntimeConfig({ apiKeys: [VALID_KEY] }),
+      adapters,
+    );
+    const response = await metadataRequest(app);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      language: "en",
+      title: "Workflow-owned title",
+      description: "Workflow-owned description",
+      duration: null,
+      availableCaptions: ["en"],
+    });
+    expect(videoInformationWorkflow).toHaveBeenCalledOnce();
+    expect(mockedExecFile).not.toHaveBeenCalled();
   });
 
   it("emits one safe acquisition failure diagnostic for the mapped unavailable outcome", async () => {
