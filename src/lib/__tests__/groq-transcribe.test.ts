@@ -6,6 +6,7 @@ import {
   GroqTranscribeError,
 } from "../groq-transcribe.js";
 import type { GroqConfig } from "../runtime-config.js";
+import { primaryLanguageCode as primary } from "../../test-support/language-tag.js";
 
 // Mock fs to avoid real disk reads; Groq receives whatever bytes we hand it.
 vi.mock("fs/promises", () => ({
@@ -88,7 +89,7 @@ describe("transcribeViaGroq", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
     vi.stubGlobal("fetch", fetchMock);
 
-    await transcribeViaGroq("/tmp/clip.mp3", "fr");
+    await transcribeViaGroq("/tmp/clip.mp3", primary("fr"));
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const formData = init.body as FormData;
@@ -112,7 +113,7 @@ describe("transcribeViaGroq", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
     vi.stubGlobal("fetch", fetchMock);
 
-    await transcribeViaGroq("/tmp/clip.mp3", "en");
+    await transcribeViaGroq("/tmp/clip.mp3", primary("en"));
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const formData = init.body as FormData;
@@ -169,7 +170,7 @@ describe("transcribeViaGroq", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
     vi.stubGlobal("fetch", fetchMock);
 
-    await transcribeViaGroq("/tmp/clip.mp3", "zh");
+    await transcribeViaGroq("/tmp/clip.mp3", primary("zh"));
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const formData = init.body as FormData;
@@ -209,7 +210,7 @@ describe("transcribeViaGroq", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse(validGroqBody));
     vi.stubGlobal("fetch", fetchMock);
 
-    await transcribeViaGroq("/tmp/clip.mp3", "cy");
+    await transcribeViaGroq("/tmp/clip.mp3", primary("cy"));
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const formData = init.body as FormData;

@@ -1,158 +1,82 @@
-import { describe, it, expect } from "vitest";
-import { getLanguageAnchorPrompt } from "../language-prompt.js";
+import { describe, expect, it } from "vitest";
 import { ISO_639_3_TO_1 } from "../language-detect.js";
+import { getLanguageAnchorPrompt } from "../language-prompt.js";
+import { primaryLanguageCode as primary } from "../../test-support/language-tag.js";
 
 describe("getLanguageAnchorPrompt", () => {
-  it("returns a non-empty string for every code detectLanguage() can return", () => {
-    // detectLanguage() emits values from ISO_639_3_TO_1 plus "en" (the
-    // ultimate fallback). Iterating the *imported* map — not a copy —
-    // is the parity guard: a future PR that adds e.g. `tgl: "tl"` to
-    // ISO_639_3_TO_1 without adding `tl` here will fail this test
-    // instead of silently dropping the anchor for that language and
-    // reintroducing the drift bug. A hardcoded list would not catch
-    // that drift.
-    const codes = new Set<string>([...Object.values(ISO_639_3_TO_1), "en"]);
+  it("returns an anchor for every language detected by the service", () => {
+    const codes = new Set([...Object.values(ISO_639_3_TO_1), "en"]);
+
     for (const code of codes) {
-      const prompt = getLanguageAnchorPrompt(code);
+      const prompt = getLanguageAnchorPrompt(primary(code));
       expect(prompt, `missing anchor for ${code}`).toBeTruthy();
       expect(prompt!.length).toBeGreaterThan(5);
     }
   });
 
-  it("returns null for unknown codes (caller falls through to flag-only pinning)", () => {
-    // Welsh — valid ISO 639-1 but not in our map. Returning null lets
-    // the caller decide; sending a wrong-language anchor would actively
-    // reintroduce the drift bug.
-    expect(getLanguageAnchorPrompt("cy")).toBeNull();
+  it("retains explicit unavailability for a valid primary code without an anchor", () => {
+    expect(getLanguageAnchorPrompt(primary("cy"))).toBeNull();
   });
 
-  it("returns null for null/undefined/empty inputs", () => {
+  it("returns null when no primary language code is provided", () => {
     expect(getLanguageAnchorPrompt(null)).toBeNull();
     expect(getLanguageAnchorPrompt(undefined)).toBeNull();
-    expect(getLanguageAnchorPrompt("")).toBeNull();
-    expect(getLanguageAnchorPrompt("  ")).toBeNull();
   });
 
-  it("returns null for normalizeLanguageCode sentinels", () => {
-    // detectLanguage upstream rejects und/zxx/mul/mis at
-    // normalizeLanguageCode and won't pass them down — but a manual VPS
-    // caller could. Pinning null here means a future map edit can't
-    // accidentally wire an anchor to a sentinel code, which would force
-    // a wrong-language anchor onto undetected/no-content audio.
-    expect(getLanguageAnchorPrompt("und")).toBeNull();
-    expect(getLanguageAnchorPrompt("zxx")).toBeNull();
-    expect(getLanguageAnchorPrompt("mul")).toBeNull();
-    expect(getLanguageAnchorPrompt("mis")).toBeNull();
+  it("selects prompts from the validated primary code", () => {
+    const zh = getLanguageAnchorPrompt(primary("zh"));
+
+    expect(getLanguageAnchorPrompt(primary("ZH"))).toEqual(zh);
+    expect(getLanguageAnchorPrompt(primary("zh-Hant-TW"))).toEqual(zh);
   });
 
-  it("extracts the primary subtag from BCP-47 input", () => {
-    // VPS schema (`languageCodeSchema` in youtube-url.ts) accepts
-    // BCP-47 directly. The frontend's `primarySubtag` normalizes
-    // before calling, but a direct VPS caller (or a future frontend
-    // bug) could ship `zh-Hans`. Without primary-subtag extraction
-    // here, that case silently skips the anchor and reintroduces the
-    // drift bug for the dominant Chinese variant.
-    const zh = getLanguageAnchorPrompt("zh");
-    expect(getLanguageAnchorPrompt("zh-Hans")).toEqual(zh);
-    expect(getLanguageAnchorPrompt("zh-Hant-TW")).toEqual(zh);
-    expect(getLanguageAnchorPrompt("en-US")).toEqual(getLanguageAnchorPrompt("en"));
+  it("preserves native-language anchor content", () => {
+    expect(getLanguageAnchorPrompt(primary("zh"))).toMatch(/\p{Script=Han}/u);
+    expect(getLanguageAnchorPrompt(primary("ja"))).toMatch(
+      /\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Han}/u,
+    );
+    expect(getLanguageAnchorPrompt(primary("ko"))).toMatch(/\p{Script=Hangul}/u);
+    expect(getLanguageAnchorPrompt(primary("ar"))).toMatch(/\p{Script=Arabic}/u);
   });
 
-  it("is case-insensitive", () => {
-    // Callers normalize to lowercase but a stray ZH or Zh shouldn't
-    // silently fall through to null and break the fix for those
-    // call sites.
-    expect(getLanguageAnchorPrompt("ZH")).toEqual(getLanguageAnchorPrompt("zh"));
-    expect(getLanguageAnchorPrompt("Zh")).toEqual(getLanguageAnchorPrompt("zh"));
-    expect(getLanguageAnchorPrompt("ZH-HANS")).toEqual(getLanguageAnchorPrompt("zh"));
-  });
-
-  it("zh anchor contains CJK characters", () => {
-    // Sanity: catches the bug where someone "fixes" an encoding issue
-    // by replacing CJK chars with English placeholders — that would
-    // make the anchor *cause* the drift bug instead of preventing it.
-    const prompt = getLanguageAnchorPrompt("zh");
-    expect(prompt).toMatch(/[一-鿿]/);
-  });
-
-  it("ja anchor contains Japanese script", () => {
-    const prompt = getLanguageAnchorPrompt("ja");
-    // Hiragana, katakana, or kanji block — at least one must be present.
-    expect(prompt).toMatch(/[぀-ゟ゠-ヿ一-鿿]/);
-  });
-
-  it("ko anchor contains Hangul", () => {
-    const prompt = getLanguageAnchorPrompt("ko");
-    expect(prompt).toMatch(/[가-힯]/);
-  });
-
-  it("ar anchor contains Arabic script", () => {
-    const prompt = getLanguageAnchorPrompt("ar");
-    expect(prompt).toMatch(/[؀-ۿ]/);
-  });
-
-  it("no anchor matches the meta-template hallucination pattern in any language", () => {
-    // Regression guard. The previous anchor form ("The following is a
-    // sentence in <X>") matched a Whisper training-data prompt
-    // template; during long silent stretches the model regurgitated
-    // that exact phrasing as transcript output (verified on
-    // hrREdNm7vB4 — segment 194.03s came back as literally "The
-    // following is a sentence in English."). Anchors must be natural
-    // content openers, not meta-templates.
-    //
-    // Catches three regression paths:
-    //  1. The literal English phrase reappears.
-    //  2. A future contributor regenerates anchors via an LLM and the
-    //     result is the *translated* form of the bad template — the
-    //     original PR forms ("以下是普通话的句子", "Lo siguiente es una
-    //     oración en español", "ما يلي هو جملة باللغة العربية") would
-    //     all pass an English-only check but reintroduce the same
-    //     bug class. Reject the per-language prefix forms too.
-    //  3. A new language is added without an anchor (parity guard).
-    const codes = new Set<string>([...Object.values(ISO_639_3_TO_1), "en"]);
-    // Native-language openings of "the following is..." / "the
-    // next..." / "below is...". Conservative subset — rejects the
-    // exact prior PR forms, leaves room for genuinely natural
-    // sentences that happen to start with similar tokens. Lowercased
-    // before match.
+  it("does not use the old meta-template anchor", () => {
+    const codes = new Set([...Object.values(ISO_639_3_TO_1), "en"]);
     const banned = [
       "the following is a sentence",
       "the following is",
-      "以下是普通话",
-      "以下は",
-      "다음은",
+      "\u4ee5\u4e0b\u662f\u666e\u901a\u8bdd",
+      "\u4ee5\u4e0b\u306f",
+      "\ub2e4\uc74c\uc740",
       "lo siguiente es",
       "ce qui suit",
-      "il seguente è",
-      "a seguir está",
+      "il seguente \u00e8",
+      "a seguir est\u00e1",
       "het volgende is",
-      "следующее ",
-      "ما يلي ",
-      "להלן ",
-      "aşağıdaki ",
-      "sau đây là",
+      "\u0441\u043b\u0435\u0434\u0443\u044e\u0449\u0435\u0435 ",
+      "\u0645\u0627 \u064a\u0644\u064a ",
+      "\u05dc\u05d4\u05dc\u05df ",
+      "a\u015fa\u011f\u0131daki ",
+      "sau \u0111\u00e2y l\u00e0",
       "berikut adalah",
-      "ต่อไปนี้",
-      "poniżej znajduje się",
-      "це речення",
-      "följande är",
-      "følgende er",
+      "\u0e15\u0e48\u0e2d\u0e44\u0e1b\u0e19\u0e35\u0e49",
+      "poni\u017cej znajduje si\u0119",
+      "\u0446\u0435 \u0440\u0435\u0447\u0435\u043d\u043d\u044f",
+      "f\u00f6ljande \u00e4r",
+      "f\u00f8lgende er",
       "seuraava on",
-      "následuje věta",
-      "το ακόλουθο",
-      "următoarea este",
-      "a következő",
-      "यह हिंदी में एक वाक्य",
+      "n\u00e1sleduje v\u011bta",
+      "\u03c4\u03bf \u03b1\u03ba\u03cc\u03bb\u03bf\u03c5\u03b8\u03bf",
+      "urm\u0103toarea este",
+      "a k\u00f6vetkez\u0151",
+      "\u092f\u0939 \u0939\u093f\u0902\u0926\u0940 \u092e\u0947\u0902 \u090f\u0915 \u0935\u093e\u0915\u094d\u092f",
     ];
+
     for (const code of codes) {
-      const prompt = getLanguageAnchorPrompt(code);
-      expect(prompt, `null anchor for ${code}`).toBeTruthy();
+      const prompt = getLanguageAnchorPrompt(primary(code));
+      expect(prompt).toBeTruthy();
       const lower = prompt!.toLowerCase();
       for (const phrase of banned) {
-        expect(
-          lower.includes(phrase),
-          `${code} anchor matches the banned meta-template phrase "${phrase}"`
-        ).toBe(false);
+        expect(lower).not.toContain(phrase);
       }
     }
   });

@@ -7,6 +7,7 @@ import {
 } from "./groq-transcribe.js";
 import { logServiceEvent } from "./observability.js";
 import type { RuntimeConfig } from "./runtime-config.js";
+import type { PrimaryLanguageCode } from "./language-tag.js";
 import { LocalTranscriptionError, transcribeAudio } from "./whisper.js";
 import {
   AudioDownloadError,
@@ -32,7 +33,7 @@ function isOperationalCompressKind(kind: AudioCompressKind): boolean {
 
 export interface TranscriptionWorkflowInput {
   youtubeUrl: string;
-  language?: string;
+  language?: PrimaryLanguageCode;
   signal: AbortSignal;
   correlation: {
     requestId: string;
@@ -42,7 +43,7 @@ export interface TranscriptionWorkflowInput {
 
 export type GroqTranscriber = (
   audioPath: string,
-  language: string | undefined,
+  language: PrimaryLanguageCode | undefined,
   signal: AbortSignal,
 ) => Promise<{ segments: TranscriptSegment[]; language: string }>;
 
@@ -75,7 +76,7 @@ export interface TranscriptionWorkflowDependencies {
   ): Promise<number | null>;
   transcribeLocally(
     audioPath: string,
-    language: string | undefined,
+    language: PrimaryLanguageCode | undefined,
     signal: AbortSignal,
   ): Promise<TranscriptSegment[]>;
   logEvent(

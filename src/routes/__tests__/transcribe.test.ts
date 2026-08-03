@@ -69,6 +69,50 @@ describe("POST /transcribe HTTP boundary", () => {
     );
   });
 
+  it("returns the canonical tag while passing only its primary code to the workflow", async () => {
+    const response = await post({
+      youtube_url: VIDEO_URL,
+      lang: "zh-hant-tw",
+    });
+
+    expect(workflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        youtubeUrl: VIDEO_URL,
+        language: "zh",
+      }),
+    );
+    expect(await response.json()).toMatchObject({
+      language: "zh-Hant-TW",
+    });
+  });
+
+  it("preserves provider auto-detection and the auto response when language is omitted", async () => {
+    const response = await post({ youtube_url: VIDEO_URL });
+
+    expect(workflow).toHaveBeenCalledWith(
+      expect.objectContaining({ language: undefined }),
+    );
+    expect(await response.json()).toMatchObject({ language: "auto" });
+  });
+
+  it.each([
+    "auto",
+    "und",
+    "abc",
+    "en-u-ca-gregory",
+    " en",
+    "français",
+  ])("rejects language parser input %s before workflow work", async (lang) => {
+    const response = await post({ youtube_url: VIDEO_URL, lang });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "Invalid request",
+      errorId: "INVALID_REQUEST",
+    });
+    expect(workflow).not.toHaveBeenCalled();
+  });
+
   it("maps a completed outcome to the compatibility response", async () => {
     workflow.mockResolvedValue({
       ok: true,

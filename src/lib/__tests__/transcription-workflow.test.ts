@@ -8,6 +8,7 @@ import {
 import { AudioDownloadError, AudioMediaLimitError } from "../ytdlp.js";
 import { GroqTranscribeError } from "../groq-transcribe.js";
 import { LocalTranscriptionError } from "../whisper.js";
+import { primaryLanguageCode as primary } from "../../test-support/language-tag.js";
 
 const LOCAL_ONLY_POLICY: Extract<
   TranscriptionWorkflowPolicy,
@@ -88,6 +89,44 @@ describe("transcription workflow", () => {
       ok: true,
       segments: [{ text: "hello", start: 0, duration: 1 }],
     });
+  });
+
+  it("forwards a pinned Primary Language Code to local transcription", async () => {
+    const transcribeLocally = vi
+      .fn()
+      .mockResolvedValue([{ text: "bonjour", start: 0, duration: 1 }]);
+    const language = primary("fr");
+    const run = createTranscriptionWorkflow(
+      dependencies({ transcribeLocally }),
+    );
+
+    await run({ ...INPUT, language });
+
+    expect(transcribeLocally).toHaveBeenCalledWith(
+      "/tmp/audio.mp3",
+      language,
+      INPUT.signal,
+    );
+  });
+
+  it("forwards a pinned Primary Language Code to Groq transcription", async () => {
+    const transcribeViaGroq = vi.fn().mockResolvedValue({
+      segments: [{ text: "bonjour", start: 0, duration: 1 }],
+      language: "fr",
+    });
+    const language = primary("fr");
+    const run = createTranscriptionWorkflow(
+      dependencies(),
+      groqFirstPolicy({ transcribeViaGroq }),
+    );
+
+    await run({ ...INPUT, language });
+
+    expect(transcribeViaGroq).toHaveBeenCalledWith(
+      "/tmp/audio.mp3",
+      language,
+      INPUT.signal,
+    );
   });
 
   it("does not apply the Groq fallback cap to primary local transcription", async () => {
