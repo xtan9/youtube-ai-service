@@ -1,6 +1,5 @@
 import type { Hono } from "hono";
 import { z } from "zod";
-import { createYtdlpMetadataFetcher } from "../lib/ytdlp-metadata.js";
 import type { YtdlpMetadata } from "../lib/language-detect.js";
 import {
   detectLanguage,
@@ -12,15 +11,13 @@ import { respondWithOperationalOutcome } from "../lib/http-errors.js";
 import { logServiceEvent } from "../lib/observability.js";
 import type { ResourceAdmission } from "../lib/resource-limits.js";
 import type { ServiceEnv } from "../lib/request-id.js";
-import type { RuntimeConfig } from "../lib/runtime-config.js";
 import {
   createDataRoute,
   readDataRequest,
   type DataRouteConfig,
 } from "./data-route.js";
 
-type MetadataRouteConfig = DataRouteConfig &
-  Pick<RuntimeConfig, "mediaAcquisition">;
+type MetadataRouteConfig = DataRouteConfig;
 
 export interface MetadataRouteDependencies {
   fetchMetadata(url: string, signal: AbortSignal): Promise<YtdlpMetadata>;
@@ -29,9 +26,7 @@ export interface MetadataRouteDependencies {
 export function createMetadataRoute(
   config: MetadataRouteConfig,
   admission: ResourceAdmission,
-  dependencies: MetadataRouteDependencies = {
-    fetchMetadata: createYtdlpMetadataFetcher(config.mediaAcquisition),
-  },
+  dependencies: MetadataRouteDependencies,
 ): Hono<ServiceEnv> {
   const metadata = createDataRoute("metadata", config, admission);
 

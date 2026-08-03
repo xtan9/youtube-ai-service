@@ -1,19 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import fixturesJson from "../../../test-fixtures/transcription-contract/v1/cases.json";
-import {
-  createCaptionsRoute,
-  type CaptionsRouteDependencies,
-} from "../captions.js";
-import {
-  createMetadataRoute,
-  type MetadataRouteDependencies,
-} from "../metadata.js";
-import { createTranscribeRoute } from "../transcribe.js";
-import type { CaptionResult, TranscriptSegment } from "../../lib/captions.js";
-import type { YtdlpMetadata } from "../../lib/language-detect.js";
-import type { TranscriptionWorkflow } from "../../lib/transcription-workflow.js";
-import { createResourceAdmission } from "../../lib/resource-limits.js";
-import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import fixturesJson from "../../test-fixtures/transcription-contract/v1/cases.json";
+import { createApp } from "../app.js";
+import type { CaptionsRouteDependencies } from "../routes/captions.js";
+import type { MetadataRouteDependencies } from "../routes/metadata.js";
+import type { CaptionResult, TranscriptSegment } from "../lib/captions.js";
+import type { YtdlpMetadata } from "../lib/language-detect.js";
+import type { TranscriptionWorkflow } from "../lib/transcription-workflow.js";
+import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
 
 type WireResponse = {
   status: number;
@@ -60,29 +53,18 @@ type ContractFixtures = {
 const fixtures = fixturesJson as unknown as ContractFixtures;
 const VALID_KEY = "fixture-key";
 const testConfig = createTestRuntimeConfig({ apiKeys: [VALID_KEY] });
-const admission = createResourceAdmission(testConfig.admission);
 const captionsDependencies: CaptionsRouteDependencies = {
   fetchCaptions: vi.fn(),
 };
-const captions = createCaptionsRoute(
-  testConfig,
-  admission,
-  captionsDependencies,
-);
 const metadataDependencies: MetadataRouteDependencies = {
   fetchMetadata: vi.fn(),
 };
-const metadata = createMetadataRoute(
-  testConfig,
-  admission,
-  metadataDependencies,
-);
 const workflow = vi.fn<TranscriptionWorkflow>();
-const transcribe = createTranscribeRoute(testConfig, admission, workflow);
-
-type RequestableRoute = {
-  request(path: string, init: RequestInit): Response | Promise<Response>;
-};
+const app = createApp(testConfig, {
+  fetchCaptions: captionsDependencies.fetchCaptions,
+  fetchMetadata: metadataDependencies.fetchMetadata,
+  transcriptionWorkflow: workflow,
+});
 
 function getCase(id: string): FixtureWithService {
   const fixture = fixtures.cases.find((candidate) => candidate.id === id);
@@ -91,8 +73,8 @@ function getCase(id: string): FixtureWithService {
   return fixture as FixtureWithService;
 }
 
-async function post(route: RequestableRoute, body: unknown): Promise<Response> {
-  return await route.request("/", {
+async function post(path: string, body: unknown): Promise<Response> {
+  return await app.request(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -103,8 +85,8 @@ async function post(route: RequestableRoute, body: unknown): Promise<Response> {
   });
 }
 
-async function postRaw(route: RequestableRoute, body: string): Promise<Response> {
-  return await route.request("/", {
+async function postRaw(path: string, body: string): Promise<Response> {
+  return await app.request(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -197,10 +179,10 @@ describe("service routes against transcription-http/v1 fixtures", () => {
   ])("serves the %s metadata fixture at the HTTP boundary", async (id) => {
     const fixture = getCase(id);
     const value = fixture.service?.arrange?.value as YtdlpMetadata;
-    vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue(value);
+    vi.mocked(metadataDependencies.fetchMetadata).mockResolvedValue(value);
 
     const response = await post(
-      metadata,
+      "/metadata",
       { youtube_url: fixture.request.youtube_url ?? fixtures.youtubeUrl }
     );
     await expectWireResponse(response, fixture.service.response);
@@ -212,19 +194,19 @@ describe("service routes against transcription-http/v1 fixtures", () => {
       const fixture = getCase(id);
       const arrangement = fixture.service?.arrange;
       if (arrangement?.kind === "captions") {
-        vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(
+        vi.mocked(captionsDependencies.fetchCaptions).mockResolvedValue(
           arrangement.value as CaptionResult
         );
       } else if (arrangement?.kind === "captions-null") {
-        vi.spyOn(captionsDependencies, "fetchCaptions").mockResolvedValue(null);
+        vi.mocked(captionsDependencies.fetchCaptions).mockResolvedValue(null);
       } else {
-        vi.spyOn(captionsDependencies, "fetchCaptions").mockRejectedValue(
+        vi.mocked(captionsDependencies.fetchCaptions).mockRejectedValue(
           new Error("fixture provider failure")
         );
       }
 
       const response = await post(
-        captions,
+        "/captions",
         fixture.request.youtube_url
           ? {
               youtube_url: fixture.request.youtube_url,
@@ -238,7 +220,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
 
   it("serves the malformed-json fixture as a 400 client error", async () => {
     const fixture = getCase("malformed-json");
-    const response = await postRaw(captions, fixture.request.raw ?? "");
+    const response = await postRaw("/captions", fixture.request.raw ?? "");
     await expectWireResponse(response, fixture.service.response);
   });
 
@@ -252,11 +234,11 @@ describe("service routes against transcription-http/v1 fixtures", () => {
         lang,
       };
       await expectWireResponse(
-        await post(captions, body),
+        await post("/captions", body),
         fixture.service.response
       );
       await expectWireResponse(
-        await post(transcribe, body),
+        await post("/transcribe", body),
         fixture.service.response
       );
     }
@@ -277,7 +259,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
     );
 
     const response = await post(
-      transcribe,
+      "/transcribe",
       fixture.request.youtube_url
         ? {
             youtube_url: fixture.request.youtube_url,
@@ -295,7 +277,7 @@ describe("service routes against transcription-http/v1 fixtures", () => {
       reason: "temporarily-unavailable",
     });
 
-    const response = await post(transcribe, {
+    const response = await post("/transcribe", {
       youtube_url: fixture.request.youtube_url ?? fixtures.youtubeUrl,
     });
     await expectWireResponse(response, fixture.service.response);

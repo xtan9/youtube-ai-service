@@ -5,36 +5,37 @@ vi.mock("child_process", () => ({
 }));
 
 import { execFile } from "child_process";
-import { health } from "../health.js";
-import {
-  createMetadataRoute,
-  type MetadataRouteDependencies,
-} from "../metadata.js";
-import { createYtdlpMetadataFetcher } from "../../lib/ytdlp-metadata.js";
-import { createResourceAdmission } from "../../lib/resource-limits.js";
-import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import { createApp } from "../app.js";
+import type { MetadataRouteDependencies } from "../routes/metadata.js";
+import { createYtdlpMetadataFetcher } from "../lib/ytdlp-metadata.js";
+import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
 
 const CURRENT_KEY = "current-key";
 const PREVIOUS_KEY = "previous-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const REQUEST_ID = "req-148-example";
 const metadataConfig = createTestRuntimeConfig({ apiKeys: [CURRENT_KEY] });
-const metadataDependencies: MetadataRouteDependencies = {
-  fetchMetadata: createYtdlpMetadataFetcher(metadataConfig.mediaAcquisition),
-};
-const metadata = createMetadataRoute(
-  metadataConfig,
-  createResourceAdmission(metadataConfig.admission),
-  metadataDependencies,
+const productionFetchMetadata = createYtdlpMetadataFetcher(
+  metadataConfig.mediaAcquisition,
 );
+const metadataDependencies: MetadataRouteDependencies = {
+  fetchMetadata: vi.fn(productionFetchMetadata),
+};
+const appAdapters = {
+  fetchCaptions: vi.fn(),
+  fetchMetadata: metadataDependencies.fetchMetadata,
+  transcriptionWorkflow: vi.fn(),
+};
+const app = createApp(metadataConfig, appAdapters);
 
 const mockedExecFile = vi.mocked(execFile);
 
 function metadataRequest(
   headers: Record<string, string> = {},
-  body: unknown = { youtube_url: VIDEO_URL }
+  body: unknown = { youtube_url: VIDEO_URL },
+  requestApp = app,
 ) {
-  return metadata.request("/", {
+  return requestApp.request("/metadata", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -48,6 +49,9 @@ function metadataRequest(
 describe("transcription HTTP operational contract", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(metadataDependencies.fetchMetadata)
+      .mockReset()
+      .mockImplementation(productionFetchMetadata);
     mockedExecFile.mockImplementation(
       // @ts-expect-error execFile overloads do not narrow cleanly in mocks
       (_command, _args, _options, callback) => {
@@ -67,7 +71,7 @@ describe("transcription HTTP operational contract", () => {
   });
 
   it("keeps health unauthenticated and returns only minimal status", async () => {
-    const response = await health.request("/health", {
+    const response = await app.request("/health", {
       headers: { "X-Request-ID": REQUEST_ID },
     });
 
@@ -77,7 +81,7 @@ describe("transcription HTTP operational contract", () => {
   });
 
   it("replaces malformed request IDs with a bounded generated ID", async () => {
-    const response = await health.request("/health", {
+    const response = await app.request("/health", {
       headers: { "X-Request-ID": "contains spaces and secrets" },
     });
 
@@ -108,12 +112,8 @@ describe("transcription HTTP operational contract", () => {
     const rotatingConfig = createTestRuntimeConfig({
       apiKeys: [CURRENT_KEY, PREVIOUS_KEY],
     });
-    const rotatingMetadata = createMetadataRoute(
-      rotatingConfig,
-      createResourceAdmission(rotatingConfig.admission),
-      metadataDependencies,
-    );
-    vi.spyOn(metadataDependencies, "fetchMetadata").mockResolvedValue({
+    const rotatingApp = createApp(rotatingConfig, appAdapters);
+    vi.mocked(metadataDependencies.fetchMetadata).mockResolvedValue({
       title: "Example",
       description: "A description",
       language: "en",
@@ -122,7 +122,7 @@ describe("transcription HTTP operational contract", () => {
       automatic_captions: {},
     });
 
-    const response = await rotatingMetadata.request("/", {
+    const response = await rotatingApp.request("/metadata", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -157,7 +157,7 @@ describe("transcription HTTP operational contract", () => {
   it("does not log full YouTube URLs or content when a provider fails", async () => {
     const errorMessage =
       `provider failed for ${VIDEO_URL}?token=secret Transcript: private text`;
-    vi.spyOn(metadataDependencies, "fetchMetadata").mockRejectedValue(
+    vi.mocked(metadataDependencies.fetchMetadata).mockRejectedValue(
       new Error(errorMessage)
     );
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
