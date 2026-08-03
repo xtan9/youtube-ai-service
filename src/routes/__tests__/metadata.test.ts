@@ -3,6 +3,7 @@ import { createMetadataRoute } from "../metadata.js";
 import type { VideoInformationWorkflow } from "../../lib/video-information-workflow.js";
 import { createResourceAdmission } from "../../lib/resource-limits.js";
 import { createTestRuntimeConfig } from "../../test-support/runtime-config.js";
+import { languageTag } from "../../test-support/language-metadata.js";
 
 const VALID_KEY = "test-key";
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -33,7 +34,7 @@ beforeEach(() => {
       title: "Example",
       description: "A description",
       durationSeconds: 42,
-      languageHint: "en",
+      languageHint: languageTag("en"),
       availableCaptionLanguages: [],
     },
   });
@@ -51,9 +52,12 @@ describe("POST /metadata", () => {
       videoInformation: {
         title: "Comment apprendre",
         description: "Une vidéo en français",
-        languageHint: "fr",
+        languageHint: languageTag("fr-FR"),
         durationSeconds: 893,
-        availableCaptionLanguages: ["fr", "en"],
+        availableCaptionLanguages: [
+          languageTag("fr").primaryLanguageCode,
+          languageTag("en").primaryLanguageCode,
+        ],
       },
     });
 
@@ -89,7 +93,7 @@ describe("POST /metadata", () => {
       videoInformation: {
         title: "Live",
         description: "",
-        languageHint: "en",
+        languageHint: languageTag("en"),
         durationSeconds: null,
         availableCaptionLanguages: [],
       },

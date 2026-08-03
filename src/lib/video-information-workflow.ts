@@ -2,17 +2,32 @@ import {
   detectLanguage,
   extractAvailableCaptions,
 } from "./language-detect.js";
+import {
+  parseLanguageTag,
+  type LanguageTag,
+  type PrimaryLanguageCode,
+} from "./language-tag.js";
 import { logServiceEvent } from "./observability.js";
 import type { RuntimeConfig } from "./runtime-config.js";
 import {
   createYtdlpMetadataFetcher,
   YtdlpAcquisitionError,
+  type YtdlpLanguageTagRejection,
   type YtdlpMetadata,
 } from "./ytdlp-metadata.js";
 
 const MAX_DIAGNOSTIC_COUNT = 1_000;
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 4_000;
 const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
+const MAX_LANGUAGE_REJECTION_LOG_COUNT = 1_000;
+
+const DEFAULT_LANGUAGE_TAG: LanguageTag = (() => {
+  const parsed = parseLanguageTag("en");
+  if (!parsed.ok) {
+    throw new Error("English fallback must be a valid Language Tag");
+  }
+  return parsed.languageTag;
+})();
 
 function boundDiagnosticMeasurement(value: number, maximum: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -40,8 +55,8 @@ export interface VideoInformation {
   readonly title: string;
   readonly description: string;
   readonly durationSeconds: number | null;
-  readonly languageHint: string;
-  readonly availableCaptionLanguages: readonly string[];
+  readonly languageHint: LanguageTag;
+  readonly availableCaptionLanguages: readonly PrimaryLanguageCode[];
 }
 
 export type VideoInformationWorkflowOutcome =
@@ -63,8 +78,10 @@ export interface VideoInformationWorkflowDependencies {
     url: string,
     signal: AbortSignal,
   ) => Promise<YtdlpMetadata>;
-  readonly detectLanguage: (metadata: YtdlpMetadata) => string | null;
-  readonly extractAvailableCaptions: (metadata: YtdlpMetadata) => readonly string[];
+  readonly detectLanguage: (metadata: YtdlpMetadata) => LanguageTag | null;
+  readonly extractAvailableCaptions: (
+    metadata: YtdlpMetadata,
+  ) => readonly PrimaryLanguageCode[];
   readonly logEvent: (
     level: "error" | "warn" | "info",
     event: string,
@@ -93,6 +110,12 @@ export function createVideoInformationWorkflow(
       );
       input.signal.throwIfAborted();
 
+      logLanguageTagRejections(
+        dependencies,
+        metadata.languageTagRejections,
+        correlation,
+      );
+
       const detectedLanguage = dependencies.detectLanguage(metadata);
       input.signal.throwIfAborted();
       let languageHint = detectedLanguage;
@@ -102,7 +125,7 @@ export function createVideoInformationWorkflow(
           ...correlation,
           hasLanguageField: Boolean(metadata.language),
           subtitleKeyCount: boundDiagnosticMeasurement(
-            Object.keys(metadata.subtitles).length,
+            metadata.subtitles.length,
             MAX_DIAGNOSTIC_COUNT,
           ),
           textLength: boundDiagnosticMeasurement(
@@ -111,7 +134,7 @@ export function createVideoInformationWorkflow(
           ),
         });
         input.signal.throwIfAborted();
-        languageHint = "en";
+        languageHint = DEFAULT_LANGUAGE_TAG;
       }
 
       const availableCaptionLanguages = [
@@ -150,6 +173,50 @@ export function createVideoInformationWorkflow(
       throw error;
     }
   };
+}
+
+function logLanguageTagRejections(
+  dependencies: VideoInformationWorkflowDependencies,
+  rejections: readonly YtdlpLanguageTagRejection[],
+  correlation: VideoInformationWorkflowInput["correlation"],
+): void {
+  if (!rejections || rejections.length === 0) return;
+
+  const grouped = new Map<
+    string,
+    {
+      readonly source: YtdlpLanguageTagRejection["source"];
+      readonly reason: YtdlpLanguageTagRejection["reason"];
+      count: number;
+    }
+  >();
+
+  for (const rejection of rejections) {
+    const key = `${rejection.source}:${rejection.reason}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count = Math.min(
+        existing.count + 1,
+        MAX_LANGUAGE_REJECTION_LOG_COUNT,
+      );
+      continue;
+    }
+    grouped.set(key, {
+      source: rejection.source,
+      reason: rejection.reason,
+      count: 1,
+    });
+  }
+
+  for (const rejection of grouped.values()) {
+    dependencies.logEvent("warn", "metadata.LANGUAGE_TAG_REJECTED", {
+      errorId: "LANGUAGE_TAG_REJECTED",
+      ...correlation,
+      source: rejection.source,
+      reason: rejection.reason,
+      rejectionCount: rejection.count,
+    });
+  }
 }
 
 type ProductionVideoInformationConfig = Pick<

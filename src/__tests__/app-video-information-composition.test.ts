@@ -7,6 +7,7 @@ vi.mock("child_process", () => ({
 import { execFile } from "child_process";
 import { createApp, type AppAdapters } from "../app.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
+import { languageTag } from "../test-support/language-metadata.js";
 import type { VideoInformationWorkflow } from "../lib/video-information-workflow.js";
 
 const mockedExecFile = vi.mocked(execFile);
@@ -78,8 +79,8 @@ describe("production Video Information composition", () => {
           title: "Workflow-owned title",
           description: "Workflow-owned description",
           durationSeconds: null,
-          languageHint: "en",
-          availableCaptionLanguages: ["en"],
+          languageHint: languageTag("en"),
+          availableCaptionLanguages: [languageTag("en").primaryLanguageCode],
         },
       });
     const adapters = {

@@ -11,6 +11,11 @@ import {
   YtdlpAcquisitionError,
   type YtdlpMetadata,
 } from "../ytdlp-metadata.js";
+import {
+  captionLanguage,
+  createYtdlpMetadata,
+  languageTag,
+} from "../../test-support/language-metadata.js";
 
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 const CORRELATION = {
@@ -18,14 +23,7 @@ const CORRELATION = {
   videoId: "dQw4w9WgXcQ",
 };
 
-const baseMetadata: YtdlpMetadata = {
-  title: "",
-  description: "",
-  language: null,
-  duration: null,
-  subtitles: {},
-  automatic_captions: {},
-};
+const baseMetadata: YtdlpMetadata = createYtdlpMetadata();
 
 function createDependencies(
   metadata: YtdlpMetadata,
@@ -46,14 +44,14 @@ describe("video information workflow", () => {
       ...baseMetadata,
       title: "English title",
       description: "English description",
-      language: "fr-FR",
+      language: languageTag("fr-FR"),
       duration: 893,
-      subtitles: {
-        fr: [{ url: "manual-fr", ext: "vtt" }],
-      },
-      automatic_captions: {
-        "en-US": [{ url: "automatic-en", ext: "vtt" }],
-      },
+      subtitles: [
+        captionLanguage("fr", [{ url: "manual-fr", ext: "vtt" }]),
+      ],
+      automatic_captions: [
+        captionLanguage("en-US", [{ url: "automatic-en", ext: "vtt" }]),
+      ],
     });
     const workflow = createVideoInformationWorkflow(dependencies);
 
@@ -69,7 +67,7 @@ describe("video information workflow", () => {
         title: "English title",
         description: "English description",
         durationSeconds: 893,
-        languageHint: "fr",
+        languageHint: languageTag("fr-FR"),
         availableCaptionLanguages: expect.arrayContaining(["fr", "en"]),
       },
     });
@@ -104,7 +102,7 @@ describe("video information workflow", () => {
         title: "",
         description: "",
         durationSeconds: null,
-        languageHint: "en",
+        languageHint: languageTag("en"),
         availableCaptionLanguages: [],
       },
     });
@@ -121,6 +119,53 @@ describe("video information workflow", () => {
     );
   });
 
+  it("owns correlated, bounded observability for provider language rejection", async () => {
+    const logEvent = vi.fn();
+    const dependencies = createDependencies(
+      {
+        ...baseMetadata,
+        languageTagRejections: [
+          { source: "uploader-language", reason: "sentinel" },
+          { source: "manual-caption-key", reason: "malformed" },
+          { source: "manual-caption-key", reason: "malformed" },
+        ],
+      },
+      { logEvent },
+    );
+    const workflow = createVideoInformationWorkflow(dependencies);
+
+    const result = await workflow({
+      youtubeUrl: VIDEO_URL,
+      signal: new AbortController().signal,
+      correlation: CORRELATION,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(logEvent).toHaveBeenCalledWith(
+      "warn",
+      "metadata.LANGUAGE_TAG_REJECTED",
+      {
+        errorId: "LANGUAGE_TAG_REJECTED",
+        ...CORRELATION,
+        source: "uploader-language",
+        reason: "sentinel",
+        rejectionCount: 1,
+      },
+    );
+    expect(logEvent).toHaveBeenCalledWith(
+      "warn",
+      "metadata.LANGUAGE_TAG_REJECTED",
+      {
+        errorId: "LANGUAGE_TAG_REJECTED",
+        ...CORRELATION,
+        source: "manual-caption-key",
+        reason: "malformed",
+        rejectionCount: 2,
+      },
+    );
+    expect(JSON.stringify(logEvent.mock.calls)).not.toContain("raw-provider");
+  });
+
   it("bounds fallback diagnostics to safe measurements", async () => {
     const logEvent = vi.fn();
     const dependencies = createDependencies(
@@ -128,8 +173,8 @@ describe("video information workflow", () => {
         ...baseMetadata,
         title: "t".repeat(10_000),
         description: "d".repeat(10_000),
-        subtitles: Object.fromEntries(
-          Array.from({ length: 10_000 }, (_, index) => [`lang-${index}`, []]),
+        subtitles: Array.from({ length: 10_000 }, () =>
+          captionLanguage("en", []),
         ),
       },
       {
@@ -158,14 +203,14 @@ describe("video information workflow", () => {
   it("combines and deduplicates normalized Caption Track languages", async () => {
     const dependencies = createDependencies({
       ...baseMetadata,
-      subtitles: {
-        "fr-FR": [{ url: "manual-fr", ext: "vtt" }],
-        en: [{ url: "manual-en", ext: "vtt" }],
-      },
-      automatic_captions: {
-        fr: [{ url: "automatic-fr", ext: "vtt" }],
-        "zh-Hans": [{ url: "automatic-zh", ext: "vtt" }],
-      },
+      subtitles: [
+        captionLanguage("fr-FR", [{ url: "manual-fr", ext: "vtt" }]),
+        captionLanguage("en", [{ url: "manual-en", ext: "vtt" }]),
+      ],
+      automatic_captions: [
+        captionLanguage("fr", [{ url: "automatic-fr", ext: "vtt" }]),
+        captionLanguage("zh-Hans", [{ url: "automatic-zh", ext: "vtt" }]),
+      ],
     });
     const workflow = createVideoInformationWorkflow(dependencies);
 
