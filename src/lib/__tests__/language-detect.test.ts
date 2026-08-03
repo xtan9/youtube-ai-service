@@ -2,30 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   detectLanguage,
   extractAvailableCaptions,
-  normalizeLanguageCode,
 } from "../language-detect.js";
 import { captionLanguage, createYtdlpMetadata, languageTag } from "../../test-support/language-metadata.js";
-
-describe("normalizeLanguageCode compatibility", () => {
-  it.each([
-    ["en", "en"],
-    ["EN", "en"],
-    ["en-US", "en"],
-    ["zh-Hans", "zh"],
-    ["fra-CA", "fr"],
-    ["eng", "en"],
-    ["cmn", "zh"],
-  ])("derives %s as Primary Language Code %s through the canonical policy", (input, expected) => {
-    expect(normalizeLanguageCode(input)).toBe(expected);
-  });
-
-  it.each(["", " en", "en ", "und", "zxx", "mul", "mis", "abc"])(
-    "returns null for rejected input %s",
-    (input) => {
-      expect(normalizeLanguageCode(input)).toBeNull();
-    },
-  );
-});
 
 describe("detectLanguage", () => {
   it("preserves uploader Language Tag detail at the highest priority", () => {

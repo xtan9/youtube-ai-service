@@ -18,6 +18,14 @@ JSON, invalid YouTube URLs, invalid language hints, empty results, and the
 documented provider failures retain stable status meanings; provider details
 remain in bounded logs rather than response bodies.
 
+Language meanings remain endpoint-specific and stable: `/metadata` emits
+lowercase two-letter Primary Language Codes, `/captions` keeps its `language`
+field as the binary Prompt Locale derived from the returned Caption Track, and
+`/transcribe` returns the canonical full Language Tag supplied by the caller or
+`"auto"` when language is omitted. Request input is parsed once by the
+service-local Language Tag policy; Transcription, Groq, and Whisper receive
+only the resulting Primary Language Code or absence.
+
 Resource limits are enforced before provider work can produce a successful
 response. The service fails closed when any required limit setting is missing
 or invalid. Request bodies are bounded on all three data endpoints;

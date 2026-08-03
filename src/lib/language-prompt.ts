@@ -31,9 +31,9 @@ import type { PrimaryLanguageCode } from "./language-tag.js";
 // to the audio's own distribution.
 //
 // All entries fit comfortably under Whisper's 224-token prompt cap.
-// Only ISO 639-1 codes that detectLanguage() can return are listed;
-// unknown codes get null and the caller falls back to language-only
-// flag pinning (the prior behavior).
+// Prompt content owns this set of supported anchors. A valid Primary
+// Language Code without an entry gets null and the caller falls back to
+// language-only flag pinning (the prior behavior).
 //
 // Aside: Whisper still occasionally regurgitates initial_prompt during
 // silence, but a regurgitated "Hello everyone, today let's talk about

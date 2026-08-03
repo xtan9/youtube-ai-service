@@ -6,59 +6,6 @@ import {
 } from "./language-tag.js";
 import type { YtdlpMetadata } from "./ytdlp-metadata.js";
 
-// Kept for compatibility with the language-prompt parity test and callers
-// that still need to inspect the old detector vocabulary. Provider data and
-// detection do not use this table; they use the canonical Language Tag policy.
-export const ISO_639_3_TO_1: Record<string, string> = {
-  eng: "en",
-  cmn: "zh",
-  fra: "fr",
-  spa: "es",
-  jpn: "ja",
-  kor: "ko",
-  deu: "de",
-  por: "pt",
-  rus: "ru",
-  ita: "it",
-  ara: "ar",
-  hin: "hi",
-  nld: "nl",
-  tur: "tr",
-  vie: "vi",
-  ind: "id",
-  tha: "th",
-  pol: "pl",
-  ukr: "uk",
-  swe: "sv",
-  dan: "da",
-  nor: "no",
-  fin: "fi",
-  ces: "cs",
-  ell: "el",
-  heb: "he",
-  ron: "ro",
-  hun: "hu",
-};
-
-const LANGUAGE_SENTINELS: ReadonlySet<string> = new Set([
-  "und",
-  "zxx",
-  "mul",
-  "mis",
-]);
-
-/**
- * Compatibility wrapper for the previous detector helper. New provider
- * callers must use parseLanguageTag so they retain the complete tag.
- */
-export function normalizeLanguageCode(
-  code: string | null | undefined,
-): string | null {
-  if (!code || LANGUAGE_SENTINELS.has(code.toLowerCase())) return null;
-  const parsed = parseLanguageTag(code);
-  return parsed.ok ? parsed.languageTag.primaryLanguageCode : null;
-}
-
 // Hiragana and Katakana are Japanese-only. Check them before Han because
 // Japanese also uses Han characters.
 const JAPANESE_KANA_RE = /[\u3040-\u30ff]/;
