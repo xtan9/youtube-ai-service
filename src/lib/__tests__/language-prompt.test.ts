@@ -1,16 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ISO_639_3_TO_1 } from "../language-detect.js";
 import { getLanguageAnchorPrompt } from "../language-prompt.js";
-import {
-  parseLanguageTag,
-  type PrimaryLanguageCode,
-} from "../language-tag.js";
-
-function primary(input: string): PrimaryLanguageCode {
-  const result = parseLanguageTag(input);
-  if (!result.ok) throw new Error(`Expected a language code: ${input}`);
-  return result.languageTag.primaryLanguageCode;
-}
+import { primaryLanguageCode as primary } from "../../test-support/language-tag.js";
 
 describe("getLanguageAnchorPrompt", () => {
   it("returns an anchor for every language detected by the service", () => {

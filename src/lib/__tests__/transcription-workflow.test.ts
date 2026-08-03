@@ -8,16 +8,7 @@ import {
 import { AudioDownloadError, AudioMediaLimitError } from "../ytdlp.js";
 import { GroqTranscribeError } from "../groq-transcribe.js";
 import { LocalTranscriptionError } from "../whisper.js";
-import {
-  parseLanguageTag,
-  type PrimaryLanguageCode,
-} from "../language-tag.js";
-
-function primary(input: string): PrimaryLanguageCode {
-  const result = parseLanguageTag(input);
-  if (!result.ok) throw new Error(`Expected a language code: ${input}`);
-  return result.languageTag.primaryLanguageCode;
-}
+import { primaryLanguageCode as primary } from "../../test-support/language-tag.js";
 
 const LOCAL_ONLY_POLICY: Extract<
   TranscriptionWorkflowPolicy,

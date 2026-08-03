@@ -6,16 +6,7 @@ import {
   GroqTranscribeError,
 } from "../groq-transcribe.js";
 import type { GroqConfig } from "../runtime-config.js";
-import {
-  parseLanguageTag,
-  type PrimaryLanguageCode,
-} from "../language-tag.js";
-
-function primary(input: string): PrimaryLanguageCode {
-  const result = parseLanguageTag(input);
-  if (!result.ok) throw new Error(`Expected a language code: ${input}`);
-  return result.languageTag.primaryLanguageCode;
-}
+import { primaryLanguageCode as primary } from "../../test-support/language-tag.js";
 
 // Mock fs to avoid real disk reads; Groq receives whatever bytes we hand it.
 vi.mock("fs/promises", () => ({

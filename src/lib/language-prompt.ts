@@ -40,7 +40,6 @@ import type { PrimaryLanguageCode } from "./language-tag.js";
 // this topic" reads as plausible video content rather than the
 // obvious meta-phrase the previous form produced. The hallucination
 // doesn't disappear — its failure mode just becomes less user-visible.
-
 const LANGUAGE_ANCHOR_PROMPTS: Record<string, string> = {
   en: "Hello everyone, today let's talk about this topic.",
   zh: "大家好，今天我们来聊一聊这个话题。",
