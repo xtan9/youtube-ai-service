@@ -60,6 +60,7 @@ describe("Caption Track acquisition", () => {
   });
 
   it("acquires timed text, metadata, source, and Prompt Locale through one request", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     provider.mockResolvedValue(
       success({
         segments: [
@@ -91,6 +92,17 @@ describe("Caption Track acquisition", () => {
       language: "zh",
       signal: request.signal,
     });
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[captions.acquired]",
+      expect.objectContaining({
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        outcome: "acquired",
+        source: "auto_captions",
+        language: "zh",
+        segmentCount: 2,
+      }),
+    );
     expect(Object.isFrozen(request)).toBe(true);
   });
 
@@ -124,6 +136,23 @@ describe("Caption Track acquisition", () => {
     await expect(
       createCaptionTrackAcquisition(provider)(makeRequest("zh")),
     ).resolves.toMatchObject({ kind: "absent", reason: result.reason });
+  });
+
+  it("diagnoses Caption Track Absent with safe stable fields", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    provider.mockResolvedValue({ kind: "absent", reason: "disabled" });
+
+    await createCaptionTrackAcquisition(provider)(makeRequest());
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[captions.absent]",
+      expect.objectContaining({
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        outcome: "absent",
+        classification: "disabled",
+      }),
+    );
   });
 
   it("classifies an empty provider result as absent", async () => {
@@ -293,6 +322,7 @@ describe("Caption Track acquisition", () => {
         requestId: "request-123",
         videoId: "dQw4w9WgXcQ",
         errorClass: "TypeError",
+        outcome: "unexpected",
       }),
     );
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("provider body");
@@ -302,6 +332,7 @@ describe("Caption Track acquisition", () => {
   it("propagates an abort reason before provider classification", async () => {
     const controller = new AbortController();
     const reason = new DOMException("deadline", "TimeoutError");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     provider.mockImplementation(async () => {
       controller.abort(reason);
       return { kind: "absent", reason: "missing" };
@@ -312,11 +343,21 @@ describe("Caption Track acquisition", () => {
         makeRequest(undefined, controller.signal),
       ),
     ).rejects.toBe(reason);
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[captions.cancelled]",
+      expect.objectContaining({
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        outcome: "cancelled",
+        classification: "deadline",
+      }),
+    );
   });
 
   it("propagates an abort reason observed after the retry begins", async () => {
     const controller = new AbortController();
     const reason = new DOMException("request cancelled", "AbortError");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     provider
       .mockResolvedValueOnce({
         kind: "absent",
@@ -333,6 +374,15 @@ describe("Caption Track acquisition", () => {
         makeRequest("zh", controller.signal),
       ),
     ).rejects.toBe(reason);
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[captions.cancelled]",
+      expect.objectContaining({
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        outcome: "cancelled",
+        classification: "caller-aborted",
+      }),
+    );
   });
 
   it("chooses English Prompt Locale and diagnoses unsupported returned language", async () => {

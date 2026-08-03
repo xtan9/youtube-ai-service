@@ -96,6 +96,35 @@
       }
     },
     {
+      "id": "caption-video-unavailable",
+      "endpoint": "/captions",
+      "request": {
+        "youtube_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+      },
+      "service": {
+        "arrange": { "kind": "captions-video-unavailable" },
+        "response": {
+          "status": 422,
+          "body": {
+            "error": "Video unavailable",
+            "errorId": "VIDEO_UNAVAILABLE",
+            "requestId": "fixture-request-id"
+          }
+        }
+      },
+      "frontend": {
+        "response": {
+          "status": 422,
+          "body": {
+            "error": "Video unavailable",
+            "errorId": "VIDEO_UNAVAILABLE",
+            "requestId": "fixture-request-id"
+          }
+        },
+        "expect": "error"
+      }
+    },
+    {
       "id": "caption-500",
       "endpoint": "/captions",
       "request": {

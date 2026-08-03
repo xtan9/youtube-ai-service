@@ -68,6 +68,7 @@ export function createCaptionsRoute(
       //   200 — captions extracted, fallback path not needed
       //   400 — client-side input error (no retry)
       //   404 — no captions available (fallback to /transcribe, no alert)
+      //   422 — valid Video Reference cannot be retrieved (terminal)
       //   500 — unexpected library/network failure (alert, do not fall back
       //         silently since that masks real problems behind compute bills)
       switch (outcome.kind) {
@@ -91,9 +92,7 @@ export function createCaptionsRoute(
         case "absent":
           return respondWithOperationalOutcome(c, "captions-not-found");
         case "video-unavailable":
-          // Temporary compatibility mapping: the terminal Video Unavailable
-          // wire contract is activated by the coordinated consumer rollout.
-          return respondWithOperationalOutcome(c, "captions-not-found");
+          return respondWithOperationalOutcome(c, "video-unavailable");
         default: {
           const _exhaustive: never = outcome;
           void _exhaustive;

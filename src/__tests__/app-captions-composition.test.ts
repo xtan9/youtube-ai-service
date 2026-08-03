@@ -12,6 +12,10 @@ vi.mock("youtube-transcript-plus", async () => {
 
 import { createApp, type AppAdapters } from "../app.js";
 import { createTestRuntimeConfig } from "../test-support/runtime-config.js";
+import {
+  YoutubeTranscriptInvalidVideoIdError,
+  YoutubeTranscriptVideoUnavailableError,
+} from "youtube-transcript-plus";
 
 const VIDEO_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
@@ -87,4 +91,29 @@ describe("production Caption Track composition", () => {
     expect(captionTrackAcquisition).toHaveBeenCalledOnce();
     expect(mockedFetchTranscript).not.toHaveBeenCalled();
   });
+
+  it.each([
+    [
+      "provider-unavailable",
+      new YoutubeTranscriptVideoUnavailableError("dQw4w9WgXcQ"),
+    ],
+    ["invalid-reference-classified", new YoutubeTranscriptInvalidVideoIdError()],
+  ] as const)(
+    "maps the real production acquisition seam's %s outcome to terminal 422",
+    async (_label, error) => {
+      mockedFetchTranscript.mockRejectedValue(error);
+      const app = createApp(createTestRuntimeConfig());
+
+      const result = await captions(app);
+
+      expect(result).toEqual({
+        status: 422,
+        body: {
+          error: "Video unavailable",
+          errorId: "VIDEO_UNAVAILABLE",
+          requestId: expect.any(String),
+        },
+      });
+    },
+  );
 });

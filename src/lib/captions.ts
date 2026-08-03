@@ -100,6 +100,14 @@ function safeErrorClass(error: unknown): string {
     : "unknown";
 }
 
+function cancellationClassification(reason: unknown):
+  | "deadline"
+  | "caller-aborted" {
+  return reason instanceof DOMException && reason.name === "TimeoutError"
+    ? "deadline"
+    : "caller-aborted";
+}
+
 function providerCorrelation(
   request: CaptionTrackAcquisitionRequest,
 ): { readonly requestId: string; readonly videoId: string } {
@@ -274,14 +282,23 @@ function acquiredFromProviderResult(
   }
 
   request.signal.throwIfAborted();
-  return Object.freeze({
+  const promptLocale = selectPromptLocale(request, result.languageTag);
+  const outcome = Object.freeze({
     kind: "acquired" as const,
     segments: Object.freeze(segments),
     source: "auto_captions" as const,
-    promptLocale: selectPromptLocale(request, result.languageTag),
+    promptLocale,
     title: result.title,
     channelName: result.channelName,
   });
+  logServiceEvent("info", "captions.acquired", {
+    ...providerCorrelation(request),
+    outcome: "acquired",
+    source: outcome.source,
+    language: outcome.promptLocale,
+    segmentCount: boundDiagnosticCount(outcome.segments.length),
+  });
+  return outcome;
 }
 
 function mapProviderResult(
@@ -323,14 +340,13 @@ export function createCaptionTrackAcquisition(
   provider: CaptionTrackProvider,
 ): CaptionTrackAcquisition {
   return async (request) => {
-    request.signal.throwIfAborted();
     const correlation = providerCorrelation(request);
-    logServiceEvent("info", "captions.acquire", {
-      ...correlation,
-      lang: request.requestedLanguage?.tag,
-    });
-
     try {
+      request.signal.throwIfAborted();
+      logServiceEvent("info", "captions.acquire", {
+        ...correlation,
+        lang: request.requestedLanguage?.tag,
+      });
       let result = await provider(
         requestedProviderLanguage(request, request.requestedLanguage?.tag),
       );
@@ -371,11 +387,19 @@ export function createCaptionTrackAcquisition(
 
       return mapProviderResult(request, result);
     } catch (error) {
-      request.signal.throwIfAborted();
+      if (request.signal.aborted) {
+        logServiceEvent("info", "captions.cancelled", {
+          ...correlation,
+          outcome: "cancelled",
+          classification: cancellationClassification(request.signal.reason),
+        });
+        request.signal.throwIfAborted();
+      }
       logServiceEvent("error", "captions.CAPTION_UNEXPECTED_FAILURE", {
         ...correlation,
         errorId: "CAPTION_UNEXPECTED_FAILURE",
         errorClass: safeErrorClass(error),
+        outcome: "unexpected",
       });
       throw error;
     }
