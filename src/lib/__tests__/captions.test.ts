@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCaptionTrackAcquisition,
   type CaptionTrackAcquisitionRequest,
+  type CaptionTrackProviderCandidate,
   type CaptionTrackProvider,
   type CaptionTrackProviderResult,
 } from "../captions.js";
@@ -22,6 +23,11 @@ const languageTag = (input: string) => {
   return result.languageTag;
 };
 
+const identifiedTrackLanguage = (input: string) => ({
+  kind: "identified" as const,
+  languageTag: languageTag(input),
+});
+
 type ProviderSuccess = Extract<
   CaptionTrackProviderResult,
   { readonly kind: "success" }
@@ -32,10 +38,24 @@ const success = (
 ): ProviderSuccess => ({
   kind: "success",
   segments: [{ text: "hello", start: 0, duration: 1 }],
-  languageTag: "en",
+  trackLanguage: identifiedTrackLanguage("en"),
   title: "Example",
   channelName: "Channel",
   ...overrides,
+});
+
+const candidate = (language: string): CaptionTrackProviderCandidate => ({
+  languageTag: languageTag(language),
+});
+
+const languageMismatch = (
+  availableTracks: readonly CaptionTrackProviderCandidate[],
+  availableCount = availableTracks.length,
+): CaptionTrackProviderResult => ({
+  kind: "absent",
+  reason: "language-mismatch",
+  availableTracks,
+  availableCount,
 });
 
 function makeRequest(
@@ -67,7 +87,7 @@ describe("Caption Track acquisition", () => {
           { text: "Hello &amp; world", start: 1, duration: 2 },
           { text: "next", start: 3, duration: 1.5 },
         ],
-        languageTag: "zh-Hans",
+        trackLanguage: identifiedTrackLanguage("zh-Hans"),
         title: null,
         channelName: null,
       }),
@@ -88,8 +108,9 @@ describe("Caption Track acquisition", () => {
       },
     );
     expect(provider).toHaveBeenCalledWith({
+      kind: "initial",
       videoId: VIDEO_REFERENCE.videoId,
-      language: "zh",
+      requestedLanguage: languageTag("zh"),
       signal: request.signal,
     });
     expect(infoSpy).toHaveBeenCalledWith(
@@ -113,23 +134,18 @@ describe("Caption Track acquisition", () => {
     await createCaptionTrackAcquisition(provider)(request);
 
     expect(provider).toHaveBeenCalledWith({
+      kind: "initial",
       videoId: VIDEO_REFERENCE.videoId,
       signal: request.signal,
     });
-    expect(provider.mock.calls[0]?.[0]).not.toHaveProperty("language");
+    expect(provider.mock.calls[0]?.[0]).not.toHaveProperty(
+      "requestedLanguage",
+    );
   });
 
   it.each([
     ["disabled", { kind: "absent", reason: "disabled" }],
     ["missing", { kind: "absent", reason: "missing" }],
-    [
-      "language mismatch",
-      {
-        kind: "absent",
-        reason: "language-mismatch",
-        availableLanguages: ["en", "fr"],
-      },
-    ],
   ] as const)("classifies provider %s as Caption Track Absent", async (_name, result) => {
     provider.mockResolvedValue(result);
 
@@ -217,38 +233,29 @@ describe("Caption Track acquisition", () => {
     );
   });
 
-  it("retries a bare primary language with the first matching provider track", async () => {
+  it("retries a bare primary language with the first same-primary provider candidate", async () => {
+    const first = candidate("zh-Hant-TW");
+    const second = candidate("zh-Hans");
     provider
-      .mockResolvedValueOnce({
-        kind: "absent",
-        reason: "language-mismatch",
-        availableLanguages: ["und", "zh-Hant-TW", "zh-Hans"],
-      })
+      .mockResolvedValueOnce(languageMismatch([first, second], 3))
       .mockResolvedValueOnce(
-        success({ languageTag: "zh-Hant-TW" }),
+        success({ trackLanguage: identifiedTrackLanguage("zh-Hant-TW") }),
       );
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const request = makeRequest("zh");
 
-    await expect(createCaptionTrackAcquisition(provider)(request)).resolves.toMatchObject(
-      { kind: "acquired", promptLocale: "zh" },
-    );
-    expect(provider).toHaveBeenNthCalledWith(1, {
-      videoId: VIDEO_REFERENCE.videoId,
-      language: "zh",
-      signal: request.signal,
-    });
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest("zh")),
+    ).resolves.toMatchObject({ kind: "acquired", promptLocale: "zh" });
+    expect(provider).toHaveBeenCalledTimes(2);
     expect(provider).toHaveBeenNthCalledWith(2, {
+      kind: "retry",
       videoId: VIDEO_REFERENCE.videoId,
-      language: "zh-Hant-TW",
-      signal: request.signal,
+      candidate: first,
+      signal: expect.any(AbortSignal),
     });
     expect(warnSpy).toHaveBeenCalledWith(
       "[captions.CAPTION_LANG_RETRY_PRIMARY_SUBTAG]",
       expect.objectContaining({
-        errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
-        requestId: "request-123",
-        videoId: "dQw4w9WgXcQ",
         requested: "zh",
         matched: "zh-Hant-TW",
         availableCount: 3,
@@ -256,52 +263,69 @@ describe("Caption Track acquisition", () => {
     );
   });
 
-  it("matches a canonical exact identity while retrying with the provider raw token", async () => {
+  it("prefers canonical exact identity over an earlier same-primary candidate", async () => {
+    const sibling = candidate("fr-FR");
+    const exact = candidate("fr-CA");
     provider
-      .mockResolvedValueOnce({
-        kind: "absent",
-        reason: "language-mismatch",
-        availableLanguages: ["und", "abc", "fra-CA", "fr-FR"],
-      })
-      .mockResolvedValueOnce(success({ languageTag: "fra-CA" }));
-    const request = makeRequest("fr-CA");
+      .mockResolvedValueOnce(languageMismatch([sibling, exact]))
+      .mockResolvedValueOnce(
+        success({ trackLanguage: identifiedTrackLanguage("fr-CA") }),
+      );
 
-    await createCaptionTrackAcquisition(provider)(request);
+    await createCaptionTrackAcquisition(provider)(makeRequest("fr-CA"));
 
-    expect(provider.mock.calls[1]?.[0]).toMatchObject({
-      language: "fra-CA",
-    });
+    expect(provider).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ kind: "retry", candidate: exact }),
+    );
   });
 
-  it("does not downgrade a specific language tag or retry without a matching track", async () => {
-    provider.mockResolvedValue({
-      kind: "absent",
-      reason: "language-mismatch",
-      availableLanguages: ["fr-FR", "fr"],
-    });
+  it("does not downgrade a specific request to a sibling or bare candidate", async () => {
+    const sibling = candidate("fr-FR");
+    const bare = candidate("fr");
+    provider.mockResolvedValue(languageMismatch([sibling, bare]));
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
 
     await expect(
       createCaptionTrackAcquisition(provider)(makeRequest("fr-CA")),
     ).resolves.toEqual({ kind: "absent", reason: "language-mismatch" });
     expect(provider).toHaveBeenCalledOnce();
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[captions.language_mismatch]",
+      expect.objectContaining({
+        lang: "fr-CA",
+        availableCount: 2,
+      }),
+    );
   });
 
-  it("does not retry a second language mismatch", async () => {
+  it("bounds language selection to one retry", async () => {
+    const secondCandidate = candidate("zh-Hant");
+    const first = candidate("zh-Hans");
     provider
-      .mockResolvedValueOnce({
-        kind: "absent",
-        reason: "language-mismatch",
-        availableLanguages: ["zh-Hans"],
-      })
-      .mockResolvedValueOnce({
-        kind: "absent",
-        reason: "language-mismatch",
-        availableLanguages: ["zh-Hant"],
-      });
+      .mockResolvedValueOnce(languageMismatch([first]))
+      .mockResolvedValueOnce(languageMismatch([secondCandidate]));
 
     await expect(
       createCaptionTrackAcquisition(provider)(makeRequest("zh")),
     ).resolves.toEqual({ kind: "absent", reason: "language-mismatch" });
+    expect(provider).toHaveBeenCalledTimes(2);
+    expect(provider).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ kind: "retry", candidate: first }),
+    );
+  });
+
+  it("propagates an unexpected provider defect from strict retry", async () => {
+    const defect = new TypeError("retry network failed");
+    provider
+      .mockResolvedValueOnce(languageMismatch([candidate("zh-Hans")]))
+      .mockRejectedValueOnce(defect);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest("zh")),
+    ).rejects.toBe(defect);
     expect(provider).toHaveBeenCalledTimes(2);
   });
 
@@ -354,20 +378,16 @@ describe("Caption Track acquisition", () => {
     );
   });
 
-  it("propagates an abort reason observed after the retry begins", async () => {
+  it("propagates an abort reason observed during strict retry", async () => {
     const controller = new AbortController();
     const reason = new DOMException("request cancelled", "AbortError");
-    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     provider
-      .mockResolvedValueOnce({
-        kind: "absent",
-        reason: "language-mismatch",
-        availableLanguages: ["zh-Hans"],
-      })
+      .mockResolvedValueOnce(languageMismatch([candidate("zh-Hans")]))
       .mockImplementationOnce(async () => {
         controller.abort(reason);
         throw new Error("provider failure after abort");
       });
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
 
     await expect(
       createCaptionTrackAcquisition(provider)(
@@ -376,12 +396,7 @@ describe("Caption Track acquisition", () => {
     ).rejects.toBe(reason);
     expect(infoSpy).toHaveBeenCalledWith(
       "[captions.cancelled]",
-      expect.objectContaining({
-        requestId: "request-123",
-        videoId: "dQw4w9WgXcQ",
-        outcome: "cancelled",
-        classification: "caller-aborted",
-      }),
+      expect.objectContaining({ classification: "caller-aborted" }),
     );
   });
 
@@ -389,7 +404,7 @@ describe("Caption Track acquisition", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     provider.mockResolvedValue(
       success({
-        languageTag: "fr",
+        trackLanguage: identifiedTrackLanguage("fr"),
         segments: [
           {
             text: "A&amp;B &amp;#39; &#xD800; &#999999999999;",
@@ -419,6 +434,27 @@ describe("Caption Track acquisition", () => {
         requestId: "request-123",
         videoId: "dQw4w9WgXcQ",
         lang: "fr",
+      }),
+    );
+  });
+
+  it("preserves warned English Prompt Locale fallback for an unidentified track", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    provider.mockResolvedValue(
+      success({
+        trackLanguage: { kind: "unidentified", reason: "sentinel" },
+      }),
+    );
+
+    await expect(
+      createCaptionTrackAcquisition(provider)(makeRequest()),
+    ).resolves.toMatchObject({ kind: "acquired", promptLocale: "en" });
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[captions.unknown_locale]",
+      expect.objectContaining({
+        requestId: "request-123",
+        videoId: "dQw4w9WgXcQ",
+        reason: "sentinel",
       }),
     );
   });

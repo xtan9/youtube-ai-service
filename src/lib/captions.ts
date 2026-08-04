@@ -1,12 +1,14 @@
 import {
   areLanguageTagsEqual,
   haveSamePrimaryLanguage,
-  parseLanguageTag,
   type LanguageTag,
+  type PrimaryLanguageCode,
 } from "./language-tag.js";
 import { logServiceEvent } from "./observability.js";
 import {
   createYoutubeTranscriptCaptionTrackProvider,
+  type CaptionTrackProviderCandidate,
+  type ProviderCaptionTrackLanguage,
   type CaptionTrackProvider,
   type CaptionTrackProviderResult,
 } from "./caption-provider.js";
@@ -15,8 +17,10 @@ import type { YouTubeVideoReference } from "./youtube-url.js";
 
 export type {
   CaptionTrackProvider,
+  CaptionTrackProviderCandidate,
   CaptionTrackProviderRequest,
   CaptionTrackProviderResult,
+  ProviderCaptionTrackLanguage,
   ProviderTimedTextSegment,
 } from "./caption-provider.js";
 export type { TimedTextSegment } from "./timed-text.js";
@@ -69,7 +73,6 @@ export type CaptionTrackAcquisition = (
   request: CaptionTrackAcquisitionRequest,
 ) => Promise<CaptionTrackAcquisitionOutcome>;
 
-const MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH = 64;
 const MAX_DIAGNOSTIC_COUNT = 1_000;
 const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 const MAX_UNICODE_CODEPOINT = 0x10ffff;
@@ -82,11 +85,6 @@ const NAMED_XML_ENTITIES: Readonly<Record<string, string>> = {
   "&apos;": "'",
   "&nbsp;": "\u00a0",
 };
-
-type ProviderRetryTrack = Readonly<{
-  readonly languageTag: LanguageTag;
-  readonly rawToken: string;
-}>;
 
 function boundDiagnosticCount(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -148,43 +146,20 @@ function unavailable(
   return outcome;
 }
 
-function parseProviderLanguageToken(input: unknown): ProviderRetryTrack | null {
-  if (
-    typeof input !== "string" ||
-    input.length === 0 ||
-    input.length > MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH
-  ) {
-    return null;
-  }
-
-  const parsed = parseLanguageTag(input);
-  if (!parsed.ok) return null;
-
-  return Object.freeze({
-    languageTag: parsed.languageTag,
-    rawToken: input,
-  });
-}
-
 function selectProviderRetryTrack(
   requested: LanguageTag,
-  available: readonly unknown[],
-): ProviderRetryTrack | null {
-  const tracks = available
-    .map(parseProviderLanguageToken)
-    .filter((track): track is ProviderRetryTrack => track !== null);
-
-  const exact = tracks.find((track) =>
+  available: readonly CaptionTrackProviderCandidate[],
+): CaptionTrackProviderCandidate | null {
+  const exact = available.find((track) =>
     areLanguageTagsEqual(track.languageTag, requested),
   );
   if (exact) return exact;
 
-  // A specific script, region, or variant request is an exact identity
-  // request. Only a bare primary tag may select the first same-primary track.
+  // Specific tags require exact identity. Only a bare primary request may
+  // select the provider's first same-primary candidate.
   if (requested.tag !== requested.primaryLanguageCode) return null;
-
   return (
-    tracks.find((track) =>
+    available.find((track) =>
       haveSamePrimaryLanguage(track.languageTag, requested),
     ) ?? null
   );
@@ -226,27 +201,32 @@ function decodeCaptionEntities(text: string): string {
   return once === text ? once : decodeEntitiesOnce(once);
 }
 
-function selectPromptLocale(
+function trackPrimaryLanguage(
   request: CaptionTrackAcquisitionRequest,
-  languageTag: string | undefined,
-): PromptLocale {
-  const parsed = parseLanguageTag(languageTag);
-  if (!parsed.ok) {
+  trackLanguage: ProviderCaptionTrackLanguage,
+): PrimaryLanguageCode | undefined {
+  if (trackLanguage.kind === "unidentified") {
     logServiceEvent("warn", "captions.unknown_locale", {
       ...providerCorrelation(request),
-      reason: languageTag === undefined ? "missing" : parsed.reason,
+      reason: trackLanguage.reason,
     });
-    return "en";
+    return undefined;
   }
 
-  if (parsed.languageTag.primaryLanguageCode === "zh") return "zh";
-  if (parsed.languageTag.primaryLanguageCode !== "en") {
+  const { primaryLanguageCode } = trackLanguage.languageTag;
+  if (primaryLanguageCode !== "en" && primaryLanguageCode !== "zh") {
     logServiceEvent("warn", "captions.unknown_locale", {
       ...providerCorrelation(request),
-      lang: parsed.languageTag.tag,
+      lang: trackLanguage.languageTag.tag,
     });
   }
-  return "en";
+  return primaryLanguageCode;
+}
+
+function selectPromptLocale(
+  primaryLanguageCode: PrimaryLanguageCode | undefined,
+): PromptLocale {
+  return primaryLanguageCode === "zh" ? "zh" : "en";
 }
 
 function acquiredFromProviderResult(
@@ -282,7 +262,9 @@ function acquiredFromProviderResult(
   }
 
   request.signal.throwIfAborted();
-  const promptLocale = selectPromptLocale(request, result.languageTag);
+  const promptLocale = selectPromptLocale(
+    trackPrimaryLanguage(request, result.trackLanguage),
+  );
   const outcome = Object.freeze({
     kind: "acquired" as const,
     segments: Object.freeze(segments),
@@ -321,21 +303,6 @@ function mapProviderResult(
   }
 }
 
-function requestedProviderLanguage(
-  request: CaptionTrackAcquisitionRequest,
-  language: string | undefined,
-): {
-  readonly videoId: string;
-  readonly signal: AbortSignal;
-  readonly language?: string;
-} {
-  return {
-    videoId: request.videoReference.videoId,
-    ...(language !== undefined ? { language } : {}),
-    signal: request.signal,
-  };
-}
-
 export function createCaptionTrackAcquisition(
   provider: CaptionTrackProvider,
 ): CaptionTrackAcquisition {
@@ -347,9 +314,14 @@ export function createCaptionTrackAcquisition(
         ...correlation,
         lang: request.requestedLanguage?.tag,
       });
-      let result = await provider(
-        requestedProviderLanguage(request, request.requestedLanguage?.tag),
-      );
+      let result = await provider({
+        kind: "initial",
+        videoId: request.videoReference.videoId,
+        ...(request.requestedLanguage
+          ? { requestedLanguage: request.requestedLanguage }
+          : {}),
+        signal: request.signal,
+      });
       request.signal.throwIfAborted();
 
       if (
@@ -357,16 +329,15 @@ export function createCaptionTrackAcquisition(
         result.reason === "language-mismatch" &&
         request.requestedLanguage
       ) {
-        const availableLanguages = result.availableLanguages ?? [];
         const matched = selectProviderRetryTrack(
           request.requestedLanguage,
-          availableLanguages,
+          result.availableTracks,
         );
         if (!matched) {
           logServiceEvent("info", "captions.language_mismatch", {
             ...correlation,
             lang: request.requestedLanguage.tag,
-            availableCount: boundDiagnosticCount(availableLanguages.length),
+            availableCount: boundDiagnosticCount(result.availableCount),
           });
           return absent(request, "language-mismatch");
         }
@@ -376,12 +347,15 @@ export function createCaptionTrackAcquisition(
           ...correlation,
           errorId: "CAPTION_LANG_RETRY_PRIMARY_SUBTAG",
           requested: request.requestedLanguage.tag,
-          matched: matched.rawToken,
-          availableCount: boundDiagnosticCount(availableLanguages.length),
+          matched: matched.languageTag.tag,
+          availableCount: boundDiagnosticCount(result.availableCount),
         });
-        result = await provider(
-          requestedProviderLanguage(request, matched.rawToken),
-        );
+        result = await provider({
+          kind: "retry",
+          videoId: request.videoReference.videoId,
+          candidate: matched,
+          signal: request.signal,
+        });
         request.signal.throwIfAborted();
       }
 
