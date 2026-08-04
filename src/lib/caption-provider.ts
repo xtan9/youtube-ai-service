@@ -7,12 +7,26 @@ import {
   YoutubeTranscriptVideoUnavailableError,
   type TranscriptResult,
 } from "youtube-transcript-plus";
+import {
+  parseLanguageTag,
+  type LanguageTag,
+  type LanguageTagParseFailureReason,
+} from "./language-tag.js";
 
-export interface CaptionTrackProviderRequest {
+interface CaptionTrackProviderRequestBase {
   readonly videoId: string;
-  readonly language?: string;
   readonly signal: AbortSignal;
 }
+
+export type CaptionTrackProviderRequest =
+  | (CaptionTrackProviderRequestBase & {
+      readonly kind: "initial";
+      readonly requestedLanguage?: LanguageTag;
+    })
+  | (CaptionTrackProviderRequestBase & {
+      readonly kind: "retry";
+      readonly candidate: CaptionTrackProviderCandidate;
+    });
 
 export interface ProviderTimedTextSegment {
   readonly text: string;
@@ -20,18 +34,37 @@ export interface ProviderTimedTextSegment {
   readonly duration: number;
 }
 
+export type ProviderCaptionTrackLanguage =
+  | Readonly<{
+      readonly kind: "identified";
+      readonly languageTag: LanguageTag;
+    }>
+  | Readonly<{
+      readonly kind: "unidentified";
+      readonly reason: "missing" | LanguageTagParseFailureReason;
+    }>;
+
+export interface CaptionTrackProviderCandidate {
+  readonly languageTag: LanguageTag;
+}
+
 export type CaptionTrackProviderResult =
   | {
       readonly kind: "success";
       readonly segments: readonly ProviderTimedTextSegment[];
-      readonly languageTag?: string;
+      readonly trackLanguage: ProviderCaptionTrackLanguage;
       readonly title: string | null;
       readonly channelName: string | null;
     }
   | {
       readonly kind: "absent";
-      readonly reason: "disabled" | "missing" | "language-mismatch";
-      readonly availableLanguages?: readonly unknown[];
+      readonly reason: "disabled" | "missing";
+    }
+  | {
+      readonly kind: "absent";
+      readonly reason: "language-mismatch";
+      readonly availableTracks: readonly CaptionTrackProviderCandidate[];
+      readonly availableCount: number;
     }
   | {
       readonly kind: "unavailable";
@@ -48,6 +81,14 @@ class CaptionProviderSchemaError extends Error {
     this.name = "CaptionProviderSchemaError";
   }
 }
+
+const MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH = 64;
+const MAX_PROVIDER_LANGUAGE_CANDIDATES = 1_000;
+
+type ProviderCandidateTransport = Readonly<{
+  readonly videoId: string;
+  readonly rawToken: string;
+}>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -100,15 +141,25 @@ function normalizeTranscriptResult(
   }
   const details = isRecord(videoDetails) ? videoDetails : undefined;
   const firstSegment = result.segments[0];
-  const languageTag =
+  const languageToken =
     isRecord(firstSegment) && typeof firstSegment.lang === "string"
       ? firstSegment.lang
       : undefined;
+  const parsedLanguage = parseLanguageTag(languageToken);
+  const trackLanguage: ProviderCaptionTrackLanguage = parsedLanguage.ok
+    ? Object.freeze({
+        kind: "identified",
+        languageTag: parsedLanguage.languageTag,
+      })
+    : Object.freeze({
+        kind: "unidentified",
+        reason: languageToken === undefined ? "missing" : parsedLanguage.reason,
+      });
 
   return Object.freeze({
     kind: "success" as const,
     segments: Object.freeze(segments),
-    languageTag,
+    trackLanguage,
     title: details ? readNullableText(details, "title") : null,
     channelName: details
       ? readNullableText(details, "author")
@@ -123,8 +174,94 @@ function normalizeAvailableLanguages(
   return Object.freeze(
     availableLanguages
       .filter((language): language is string => typeof language === "string")
-      .slice(0, 1_000),
+      .slice(0, MAX_PROVIDER_LANGUAGE_CANDIDATES),
   );
+}
+
+function createProviderTrackCandidate(
+  candidateTransports: WeakMap<
+    CaptionTrackProviderCandidate,
+    ProviderCandidateTransport
+  >,
+  videoId: string,
+  input: string,
+): CaptionTrackProviderCandidate | null {
+  if (input.length === 0 || input.length > MAX_PROVIDER_LANGUAGE_TOKEN_LENGTH) {
+    return null;
+  }
+  const parsed = parseLanguageTag(input);
+  if (!parsed.ok) return null;
+  const candidate = Object.freeze({ languageTag: parsed.languageTag });
+  candidateTransports.set(candidate, { videoId, rawToken: input });
+  return candidate;
+}
+
+function classifyProviderError(
+  request: CaptionTrackProviderRequest,
+  candidateTransports: WeakMap<
+    CaptionTrackProviderCandidate,
+    ProviderCandidateTransport
+  >,
+  error: unknown,
+): CaptionTrackProviderResult | null {
+  if (error instanceof YoutubeTranscriptDisabledError) {
+    return { kind: "absent", reason: "disabled" };
+  }
+  if (error instanceof YoutubeTranscriptNotAvailableLanguageError) {
+    const availableLanguages = normalizeAvailableLanguages(error.availableLangs);
+    const availableTracks = availableLanguages
+      .map((language) =>
+        createProviderTrackCandidate(
+          candidateTransports,
+          request.videoId,
+          language,
+        ),
+      )
+      .filter(
+        (track): track is CaptionTrackProviderCandidate => track !== null,
+      );
+    return Object.freeze({
+      kind: "absent",
+      reason: "language-mismatch",
+      availableTracks: Object.freeze(availableTracks),
+      availableCount: availableLanguages.length,
+    });
+  }
+  if (error instanceof YoutubeTranscriptNotAvailableError) {
+    return { kind: "absent", reason: "missing" };
+  }
+  if (error instanceof YoutubeTranscriptVideoUnavailableError) {
+    return { kind: "unavailable", reason: "provider-video-unavailable" };
+  }
+  if (error instanceof YoutubeTranscriptInvalidVideoIdError) {
+    return { kind: "unavailable", reason: "invalid-video-reference" };
+  }
+  return null;
+}
+
+async function fetchProviderTrack(
+  request: CaptionTrackProviderRequest,
+  candidateTransports: WeakMap<
+    CaptionTrackProviderCandidate,
+    ProviderCandidateTransport
+  >,
+  language: string | undefined,
+): Promise<CaptionTrackProviderResult> {
+  request.signal.throwIfAborted();
+  try {
+    const response = await fetchTranscript(request.videoId, {
+      videoDetails: true,
+      ...(language !== undefined ? { lang: language } : {}),
+      signal: request.signal,
+    });
+    request.signal.throwIfAborted();
+    return normalizeTranscriptResult(response as TranscriptResult);
+  } catch (error) {
+    request.signal.throwIfAborted();
+    const outcome = classifyProviderError(request, candidateTransports, error);
+    if (outcome) return outcome;
+    throw error;
+  }
 }
 
 /**
@@ -133,47 +270,24 @@ function normalizeAvailableLanguages(
  * seam consumes only the classified adapter result above.
  */
 export function createYoutubeTranscriptCaptionTrackProvider(): CaptionTrackProvider {
-  return async (request) => {
-    request.signal.throwIfAborted();
+  const candidateTransports = new WeakMap<
+    CaptionTrackProviderCandidate,
+    ProviderCandidateTransport
+  >();
 
-    try {
-      const response = await fetchTranscript(request.videoId, {
-        videoDetails: true,
-        ...(request.language !== undefined
-          ? { lang: request.language }
-          : {}),
-        signal: request.signal,
-      });
-      request.signal.throwIfAborted();
-      return normalizeTranscriptResult(response as TranscriptResult);
-    } catch (error) {
-      request.signal.throwIfAborted();
-      if (error instanceof YoutubeTranscriptDisabledError) {
-        return { kind: "absent", reason: "disabled" };
-      }
-      if (error instanceof YoutubeTranscriptNotAvailableLanguageError) {
-        return {
-          kind: "absent",
-          reason: "language-mismatch",
-          availableLanguages: normalizeAvailableLanguages(error.availableLangs),
-        };
-      }
-      if (error instanceof YoutubeTranscriptNotAvailableError) {
-        return { kind: "absent", reason: "missing" };
-      }
-      if (error instanceof YoutubeTranscriptVideoUnavailableError) {
-        return {
-          kind: "unavailable",
-          reason: "provider-video-unavailable",
-        };
-      }
-      if (error instanceof YoutubeTranscriptInvalidVideoIdError) {
-        return {
-          kind: "unavailable",
-          reason: "invalid-video-reference",
-        };
-      }
-      throw error;
+  return async (request) => {
+    if (request.kind === "initial") {
+      return fetchProviderTrack(
+        request,
+        candidateTransports,
+        request.requestedLanguage?.tag,
+      );
     }
+
+    const transport = candidateTransports.get(request.candidate);
+    if (!transport || transport.videoId !== request.videoId) {
+      throw new CaptionProviderSchemaError();
+    }
+    return fetchProviderTrack(request, candidateTransports, transport.rawToken);
   };
 }
