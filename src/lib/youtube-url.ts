@@ -76,15 +76,6 @@ export function parseYouTubeVideoReference(
   }
 }
 
-export function isYoutubeUrl(url: string): boolean {
-  return parseYouTubeVideoReference(url) !== null;
-}
-
-/** Extract the canonical ID only through the shared YouTube policy. */
-export function extractVideoId(url: string): string | null {
-  return parseYouTubeVideoReference(url)?.videoId ?? null;
-}
-
 /**
  * Request-boundary schema. Its output is the immutable reference, not a raw
  * URL string, so all downstream consumers share one validated identity.
@@ -100,9 +91,3 @@ export const youtubeVideoReferenceSchema = z.url().transform((url, ctx) => {
   }
   return reference;
 });
-
-// Kept for internal compatibility with callers that only need URL validation.
-// It delegates to the same policy and never maintains a second parser.
-export const youtubeUrlSchema = youtubeVideoReferenceSchema.transform(
-  (reference) => reference.url,
-);
