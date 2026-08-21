@@ -24,6 +24,7 @@ export interface AdmissionConfig {
 
 export interface GroqConfig {
   readonly apiKey: string;
+  readonly apiUrl: string;
   readonly model: string;
   readonly timeoutMs: number;
 }
@@ -67,6 +68,7 @@ const DEFAULTS = {
   captionsTimeoutMs: 30_000,
   transcribeTimeoutMs: 300_000,
   groqModel: "whisper-large-v3",
+  groqApiUrl: "https://api.groq.com/openai/v1/audio/transcriptions",
   groqTimeoutMs: 180_000,
   localFallbackMaxSeconds: 180,
   potProviderUrl: "http://127.0.0.1:4416",
@@ -269,6 +271,12 @@ export function loadRuntimeConfig(env: RuntimeEnvironment): RuntimeConfig {
     invalidSettings,
     { integer: true },
   );
+  const groqApiUrl = urlSetting(
+    env,
+    "GROQ_API_URL",
+    DEFAULTS.groqApiUrl,
+    invalidSettings,
+  );
   const localFallbackMaxSeconds = positiveNumberSetting(
     env,
     "GROQ_LOCAL_FALLBACK_MAX_SECONDS",
@@ -310,6 +318,7 @@ export function loadRuntimeConfig(env: RuntimeEnvironment): RuntimeConfig {
       groq: groqApiKey
         ? {
             apiKey: groqApiKey,
+            apiUrl: groqApiUrl,
             model: readNonBlankSetting(env, "GROQ_MODEL") ?? DEFAULTS.groqModel,
             timeoutMs: groqTimeoutMs,
           }

@@ -39,6 +39,7 @@ prevents the HTTP server from starting.
 
 - `VPS_API_KEY` (required) — Bearer token clients must present.
 - `GROQ_API_KEY` (required for primary transcription path) — when unset, the service silently falls through to local Whisper at any audio length.
+- `GROQ_API_URL` (optional, default `https://api.groq.com/openai/v1/audio/transcriptions`) — Groq transcription endpoint. Docker Compose routes this through an internal direct-egress forwarder so large uploads do not traverse the residential Tailscale exit used for YouTube.
 - `VPS_API_KEY_PREVIOUS` (optional) — previous Bearer token accepted during a
   short rotation overlap. Set the new `VPS_API_KEY`, keep the old value here
   only while the frontend is verified, then remove it and redeploy.
