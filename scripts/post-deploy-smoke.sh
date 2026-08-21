@@ -117,7 +117,7 @@ if ! docker exec -e SMOKE_VIDEO="$smoke_video" youtube-ai-service sh -ec '
       --js-runtimes deno \
       --extractor-args "youtube:player_client=web_embedded" \
       --extractor-args "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416" \
-      -f bestaudio \
+      -f "249/250/bestaudio[ext=webm]/bestaudio" \
       -o "$probe_dir/probe.%(ext)s" \
       "$SMOKE_VIDEO" >/dev/null 2>&1
     find "$probe_dir" -type f -size +0c -print -quit | grep -q .
