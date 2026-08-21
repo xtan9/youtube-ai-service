@@ -56,7 +56,7 @@ describe("buildYtdlpArgs", () => {
     expect(clients[0]).not.toBe("web");
   });
 
-  it("uses one PO-Token-bound client so the selected media URL matches its token", () => {
+  it("uses one full-download-capable client so the selected media URL matches its request profile", () => {
     const args = buildYtdlpArgs(
       VIDEO_REFERENCE,
       "/tmp/x.mp3",
@@ -64,7 +64,7 @@ describe("buildYtdlpArgs", () => {
     );
     const extractorArgsIdx = args.indexOf("--extractor-args");
     const value = args[extractorArgsIdx + 1];
-    expect(value).toBe("youtube:player_client=mweb");
+    expect(value).toBe("youtube:player_client=web_embedded");
   });
 
   it("sets a browser User-Agent matching the player_client profile", () => {
