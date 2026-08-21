@@ -62,8 +62,17 @@ echo "[smoke] Groq direct egress: verifying the internal forwarder reaches Groq"
 # network forwarder whose own egress is the VPS. The models call is cheap and
 # proves DNS, Docker routing, TLS, auth forwarding, and Groq availability
 # without consuming audio transcription quota.
+forwarder_ip="$(docker exec yt-ai-groq-forwarder wget -q -O - https://api.ipify.org || echo unknown)"
+if [[ "$forwarder_ip" == "unknown" || "$forwarder_ip" != "$vps_ip" ]]; then
+  echo "[smoke] FAIL: Groq forwarder egress=$forwarder_ip; expected direct VPS egress=$vps_ip"
+  exit 1
+fi
 if ! docker exec youtube-ai-service node -e "
 const url = new URL(process.env.GROQ_API_URL);
+if (url.hostname !== 'groq-forwarder') {
+  console.error('unexpected GROQ_API_URL host', url.hostname);
+  process.exit(1);
+}
 url.pathname = '/openai/v1/models';
 fetch(url, {
   headers: { Authorization: 'Bearer ' + process.env.GROQ_API_KEY },
@@ -76,7 +85,7 @@ fetch(url, {
   docker logs yt-ai-groq-forwarder --tail 40 || true
   exit 1
 fi
-echo "[smoke] OK: Groq direct-egress forwarder returned 200"
+echo "[smoke] OK: Groq forwarder egress=$forwarder_ip (VPS direct) and API returned 200"
 
 echo "[smoke] pot-provider: verifying HTTP listener is reachable from the app container"
 if ! docker exec youtube-ai-service node -e "require('http').get('http://127.0.0.1:4416/ping', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"; then
