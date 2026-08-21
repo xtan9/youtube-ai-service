@@ -1,12 +1,24 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
-import { buildYtdlpArgs, createAudioDownloader } from "../ytdlp.js";
+import {
+  buildYtdlpArgs,
+  cleanupAudio,
+  createAudioDownloader,
+  createAudioPath,
+} from "../ytdlp.js";
 import { parseYouTubeVideoReference } from "../youtube-url.js";
 
 vi.mock("child_process", () => ({ execFile: vi.fn() }));
+vi.mock("fs/promises", async () => {
+  const actual =
+    await vi.importActual<typeof import("fs/promises")>("fs/promises");
+  return { ...actual, unlink: vi.fn() };
+});
 
 import { execFile } from "child_process";
+import { unlink } from "fs/promises";
 
 const mockedExecFile = vi.mocked(execFile);
+const mockedUnlink = vi.mocked(unlink);
 
 const mediaConfig = {
   potProviderUrl: "http://custom-pot-provider.internal:4416",
@@ -24,23 +36,23 @@ describe("buildYtdlpArgs", () => {
   it("builds correct yt-dlp arguments", () => {
     const args = buildYtdlpArgs(
       VIDEO_REFERENCE,
-      "/tmp/audio.mp3",
-      mediaConfig
+      "/tmp/audio.webm",
+      mediaConfig,
     );
-    expect(args).toContain("--extract-audio");
-    expect(args).toContain("--audio-format");
-    expect(args).toContain("mp3");
+    const formatIdx = args.indexOf("-f");
+    expect(args[formatIdx + 1]).toBe("249/250/bestaudio[ext=webm]/bestaudio");
+    expect(args).not.toContain("--extract-audio");
     expect(args).toContain("-o");
-    expect(args).toContain("/tmp/audio.mp3");
+    expect(args).toContain("/tmp/audio.webm");
     expect(args).toContain(VIDEO_REFERENCE.url);
   });
 
+  it("creates a path matching the directly downloaded WebM container", () => {
+    expect(createAudioPath()).toMatch(/\.webm$/);
+  });
+
   it("never tries the default `web` client first (it's the one hit by the datacenter-IP bot-wall)", () => {
-    const args = buildYtdlpArgs(
-      VIDEO_REFERENCE,
-      "/tmp/x.mp3",
-      mediaConfig
-    );
+    const args = buildYtdlpArgs(VIDEO_REFERENCE, "/tmp/x.mp3", mediaConfig);
     const extractorArgsIdx = args.indexOf("--extractor-args");
     expect(extractorArgsIdx).toBeGreaterThan(-1);
     const value = args[extractorArgsIdx + 1];
@@ -57,33 +69,21 @@ describe("buildYtdlpArgs", () => {
   });
 
   it("uses one full-download-capable client so the selected media URL matches its request profile", () => {
-    const args = buildYtdlpArgs(
-      VIDEO_REFERENCE,
-      "/tmp/x.mp3",
-      mediaConfig
-    );
+    const args = buildYtdlpArgs(VIDEO_REFERENCE, "/tmp/x.mp3", mediaConfig);
     const extractorArgsIdx = args.indexOf("--extractor-args");
     const value = args[extractorArgsIdx + 1];
     expect(value).toBe("youtube:player_client=web_embedded");
   });
 
   it("sets a browser User-Agent matching the player_client profile", () => {
-    const args = buildYtdlpArgs(
-      VIDEO_REFERENCE,
-      "/tmp/x.mp3",
-      mediaConfig
-    );
+    const args = buildYtdlpArgs(VIDEO_REFERENCE, "/tmp/x.mp3", mediaConfig);
     const uaIdx = args.indexOf("--user-agent");
     expect(uaIdx).toBeGreaterThan(-1);
     expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
   });
 
   it("enables the image-provided Deno runtime for YouTube JS challenges", () => {
-    const args = buildYtdlpArgs(
-      VIDEO_REFERENCE,
-      "/tmp/x.mp3",
-      mediaConfig
-    );
+    const args = buildYtdlpArgs(VIDEO_REFERENCE, "/tmp/x.mp3", mediaConfig);
     const runtimeIdx = args.indexOf("--js-runtimes");
     expect(runtimeIdx).toBeGreaterThan(-1);
     expect(args[runtimeIdx + 1]).toBe("deno");
@@ -92,11 +92,7 @@ describe("buildYtdlpArgs", () => {
   it("configures the PO Token provider so yt-dlp can satisfy YouTube's attestation requirement", () => {
     // Missing this arg means yt-dlp falls back to no-PO-Token mode, which
     // YouTube rejects for player responses regardless of IP or cookies.
-    const args = buildYtdlpArgs(
-      VIDEO_REFERENCE,
-      "/tmp/x.mp3",
-      mediaConfig
-    );
+    const args = buildYtdlpArgs(VIDEO_REFERENCE, "/tmp/x.mp3", mediaConfig);
     const extractorArgValues = args
       .map((a, i) => (a === "--extractor-args" ? args[i + 1] : null))
       .filter((v): v is string => v !== null);
@@ -106,7 +102,7 @@ describe("buildYtdlpArgs", () => {
     // own --extractor-args, but losing either of these two specific pairs
     // silently breaks extraction.
     expect(
-      extractorArgValues.some((v) => v.startsWith("youtube:player_client="))
+      extractorArgValues.some((v) => v.startsWith("youtube:player_client=")),
     ).toBe(true);
 
     // Exact equality against the exported constant so a URL typo, scheme
@@ -114,7 +110,7 @@ describe("buildYtdlpArgs", () => {
     // wouldn't resolve in the shared namespace) fails the test instead of
     // passing a regex that only checks shape.
     expect(extractorArgValues).toContain(
-      `youtubepot-bgutilhttp:base_url=${mediaConfig.potProviderUrl}`
+      `youtubepot-bgutilhttp:base_url=${mediaConfig.potProviderUrl}`,
     );
   });
 
@@ -138,5 +134,32 @@ describe("buildYtdlpArgs", () => {
     expect(mockedExecFile.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({ signal }),
     );
+  });
+});
+
+describe("cleanupAudio", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("removes both a completed download and an aborted partial download", async () => {
+    mockedUnlink.mockResolvedValue(undefined);
+
+    await cleanupAudio("/tmp/audio.webm");
+
+    expect(mockedUnlink.mock.calls).toEqual([
+      ["/tmp/audio.webm"],
+      ["/tmp/audio.webm.part"],
+    ]);
+  });
+
+  it("ignores missing completed and partial files", async () => {
+    mockedUnlink.mockRejectedValue(
+      Object.assign(new Error("missing"), {
+        code: "ENOENT",
+      }),
+    );
+
+    await expect(cleanupAudio("/tmp/audio.webm")).resolves.toBeUndefined();
   });
 });

@@ -3,7 +3,10 @@ import { randomUUID } from "crypto";
 import { stat, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { buildYtdlpCommonArgs } from "./ytdlp-common.js";
+import {
+  buildYtdlpCommonArgs,
+  YOUTUBE_TRANSCRIPTION_AUDIO_FORMAT,
+} from "./ytdlp-common.js";
 import { isNodeErrorWithCode } from "./node-errors.js";
 import type { MediaAcquisitionConfig } from "./runtime-config.js";
 import type { YouTubeVideoReference } from "./youtube-url.js";
@@ -11,7 +14,7 @@ import type { YouTubeVideoReference } from "./youtube-url.js";
 export class AudioMediaLimitError extends Error {
   constructor(
     public readonly sizeBytes: number,
-    public readonly maxBytes: number
+    public readonly maxBytes: number,
   ) {
     super(`downloaded media is ${sizeBytes} bytes, limit is ${maxBytes}`);
     this.name = "AudioMediaLimitError";
@@ -26,20 +29,17 @@ export class AudioDownloadError extends Error {
 }
 
 export function createAudioPath(): string {
-  return join(tmpdir(), `ytai-${randomUUID()}.mp3`);
+  return join(tmpdir(), `ytai-${randomUUID()}.webm`);
 }
 
 export function buildYtdlpArgs(
   videoReference: YouTubeVideoReference,
   outputPath: string,
-  config: MediaAcquisitionConfig
+  config: MediaAcquisitionConfig,
 ): string[] {
   return [
-    "--extract-audio",
-    "--audio-format",
-    "mp3",
-    "--audio-quality",
-    "0",
+    "-f",
+    YOUTUBE_TRANSCRIPTION_AUDIO_FORMAT,
     ...buildYtdlpCommonArgs(config),
     "-o",
     outputPath,
@@ -76,17 +76,22 @@ async function downloadAudioWithConfig(
 ): Promise<void> {
   const stderr = await new Promise<string>((resolve, reject) => {
     const args = buildYtdlpArgs(videoReference, outputPath, config);
-    execFile("yt-dlp", args, { timeout: 300_000, signal }, (error, _stdout, err) => {
-      if (error) {
-        reject(
-          new AudioDownloadError(`yt-dlp failed: ${err || error.message}`, {
-            cause: error,
-          })
-        );
-        return;
-      }
-      resolve(err);
-    });
+    execFile(
+      "yt-dlp",
+      args,
+      { timeout: 300_000, signal },
+      (error, _stdout, err) => {
+        if (error) {
+          reject(
+            new AudioDownloadError(`yt-dlp failed: ${err || error.message}`, {
+              cause: error,
+            }),
+          );
+          return;
+        }
+        resolve(err);
+      },
+    );
   });
 
   // yt-dlp can exit 0 with a missing or empty file when player-client
@@ -102,12 +107,12 @@ async function downloadAudioWithConfig(
     // misattributed to "no file produced".
     throw new AudioDownloadError(
       `yt-dlp exited 0 but stat of ${outputPath} failed (stderr: ${stderr.slice(0, 500)})`,
-      { cause: statErr }
+      { cause: statErr },
     );
   }
   if (size === 0) {
     throw new AudioDownloadError(
-      `yt-dlp exited 0 but produced a 0-byte file (stderr: ${stderr.slice(0, 500)})`
+      `yt-dlp exited 0 but produced a 0-byte file (stderr: ${stderr.slice(0, 500)})`,
     );
   }
 
@@ -116,17 +121,22 @@ async function downloadAudioWithConfig(
   }
 }
 
-
 /**
  * Clean up a temporary audio file.
  */
 export async function cleanupAudio(filePath: string): Promise<void> {
-  try {
-    await unlink(filePath);
-  } catch (error) {
-    if (isNodeErrorWithCode(error, "ENOENT")) {
-      return;
+  let firstFailure: unknown;
+  // yt-dlp writes `<output>.part` until a native download completes. The
+  // request signal can abort mid-transfer, so clean both names; otherwise a
+  // timed-out long video slowly fills the container's /tmp volume.
+  for (const candidate of [filePath, `${filePath}.part`]) {
+    try {
+      await unlink(candidate);
+    } catch (error) {
+      if (!isNodeErrorWithCode(error, "ENOENT") && firstFailure === undefined) {
+        firstFailure = error;
+      }
     }
-    throw error;
   }
+  if (firstFailure !== undefined) throw firstFailure;
 }

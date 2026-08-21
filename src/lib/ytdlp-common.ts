@@ -14,6 +14,13 @@ import type { MediaAcquisitionConfig } from "./runtime-config.js";
 // profile as the player shown by the product and completes full downloads.
 export const YOUTUBE_PLAYER_CLIENTS = "web_embedded";
 
+// Transcription does not benefit from YouTube's 128 kbps stream: Whisper
+// resamples to 16 kHz mono and Groq receives a 32 kbps derivative. Prefer the
+// stable low-bitrate Opus itags to reduce residential-egress transfer time,
+// then fall back to any WebM/audio stream when a video omits those formats.
+export const YOUTUBE_TRANSCRIPTION_AUDIO_FORMAT =
+  "249/250/bestaudio[ext=webm]/bestaudio";
+
 // Pair the client list with a browser UA so the request profile matches.
 export const SAFARI_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
@@ -29,9 +36,7 @@ export const SAFARI_USER_AGENT =
  * Common flags every yt-dlp invocation shares: playlist guard, YouTube
  * extractor tweaks (player_client + PO Token), and the matched User-Agent.
  */
-export function buildYtdlpCommonArgs(
-  config: MediaAcquisitionConfig
-): string[] {
+export function buildYtdlpCommonArgs(config: MediaAcquisitionConfig): string[] {
   return [
     "--no-playlist",
     // yt-dlp no longer ships an internal YouTube challenge interpreter.
