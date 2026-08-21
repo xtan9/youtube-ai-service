@@ -100,11 +100,12 @@ fetch('http://localhost:3001/captions', {
 fi
 echo "[smoke] OK: /captions returned a real transcript"
 
-echo "[smoke] yt-dlp: bounded media download from a known public video"
+echo "[smoke] yt-dlp: complete media download from a known short public video"
 # Metadata extraction can succeed while the signed googlevideo URL still
-# returns HTTP 403. yt-dlp's `--test` mode downloads 10 KiB with the native
-# downloader, exercising the player client, PO Token, EJS challenge solver,
-# and CDN URL without transferring the full video.
+# returns HTTP 403. A 10 KiB `--test` probe is insufficient: mweb URLs have
+# served that first Range and then rejected the complete request. Download the
+# full audio stream so this check covers the player client, EJS challenge
+# solver, CDN URL, and sustained media transfer.
 # dQw4w9WgXcQ is "Never Gonna Give You Up" — chosen because it has been
 # public, captioned, and monetized for 15+ years, so it will not be
 # age-gated, private, or region-restricted in any plausible future.
@@ -112,20 +113,20 @@ smoke_video="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 if ! docker exec -e SMOKE_VIDEO="$smoke_video" youtube-ai-service sh -ec '
     probe_dir="$(mktemp -d /tmp/ytai-media-smoke.XXXXXX)"
     trap '\''rm -rf "$probe_dir"'\'' EXIT
-    yt-dlp --test --no-playlist \
+    yt-dlp --no-playlist \
       --js-runtimes deno \
-      --extractor-args "youtube:player_client=mweb" \
+      --extractor-args "youtube:player_client=web_embedded" \
       --extractor-args "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416" \
       -f bestaudio \
       -o "$probe_dir/probe.%(ext)s" \
       "$SMOKE_VIDEO" >/dev/null 2>&1
     find "$probe_dir" -type f -size +0c -print -quit | grep -q .
   '; then
-  echo "[smoke] FAIL: bounded yt-dlp media download failed"
+  echo "[smoke] FAIL: complete yt-dlp media download failed"
   docker exec youtube-ai-service yt-dlp --version || true
   docker exec youtube-ai-service deno --version || true
   exit 1
 fi
-echo "[smoke] OK: bounded yt-dlp media download succeeded"
+echo "[smoke] OK: complete yt-dlp media download succeeded"
 
 echo "[smoke] all checks passed"

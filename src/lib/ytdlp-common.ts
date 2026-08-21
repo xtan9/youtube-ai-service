@@ -6,11 +6,13 @@ import type { MediaAcquisitionConfig } from "./runtime-config.js";
 // call path must apply to the other.
 
 // Datacenter IPs frequently hit YouTube's "Sign in to confirm you're not a
-// bot" wall when yt-dlp uses the default `web` player client. Keep one
-// PO-Token-capable client here: the provider issues a client-bound GVS token,
-// so listing multiple clients can issue a web_safari token and then select an
-// mweb media URL, which the CDN rejects with HTTP 403.
-export const YOUTUBE_PLAYER_CLIENTS = "mweb";
+// bot" wall when yt-dlp uses the default `web` player client. Keep one client
+// here: a multi-client list can bind a PO Token to one client and then select
+// another client's media URL. `mweb` is not a safe fallback as of August 2026:
+// its URL may serve a tiny Range probe and still reject the full media request
+// with HTTP 403. The embedded client uses the same browser-shaped request
+// profile as the player shown by the product and completes full downloads.
+export const YOUTUBE_PLAYER_CLIENTS = "web_embedded";
 
 // Pair the client list with a browser UA so the request profile matches.
 export const SAFARI_USER_AGENT =
