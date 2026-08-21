@@ -59,7 +59,7 @@ const DEFAULTS = {
   port: 3001,
   requestBodyMaxBytes: 65_536,
   mediaMaxBytes: 50_000_000,
-  mediaMaxDurationSeconds: 1_800,
+  mediaMaxDurationSeconds: 5_400,
   rateLimitWindowMs: 60_000,
   rateLimitMaxRequests: 60,
   maxConcurrentJobs: 2,

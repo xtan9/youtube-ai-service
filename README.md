@@ -48,7 +48,7 @@ prevents the HTTP server from starting.
 - `GROQ_TIMEOUT_MS` (optional, default `180000`).
 - `GROQ_LOCAL_FALLBACK_MAX_SECONDS` (optional, default 180) — audio cap above which we 503 instead of falling back to local Whisper after a Groq failure.
 - `POT_PROVIDER_URL` (optional, default `http://127.0.0.1:4416`) — Proof-of-Origin sidecar base URL used by every yt-dlp path.
-- `MAX_REQUEST_BODY_BYTES` (`65536`), `MAX_MEDIA_SIZE_BYTES` (`50000000`), `MAX_MEDIA_DURATION_SECONDS` (`1800`), `RATE_LIMIT_WINDOW_MS` (`60000`), `RATE_LIMIT_MAX_REQUESTS` (`60`), and `MAX_CONCURRENT_JOBS` (`2`) — optional request, media, per-key rate, and transcription concurrency limits.
+- `MAX_REQUEST_BODY_BYTES` (`65536`), `MAX_MEDIA_SIZE_BYTES` (`50000000`), `MAX_MEDIA_DURATION_SECONDS` (`5400`), `RATE_LIMIT_WINDOW_MS` (`60000`), `RATE_LIMIT_MAX_REQUESTS` (`60`), and `MAX_CONCURRENT_JOBS` (`2`) — optional request, media, per-key rate, and transcription concurrency limits. The 90-minute default remains within the upstream 25 MB upload limit after the service's 32 kbps compression step.
 - `METADATA_TIMEOUT_MS` (`30000`), `CAPTIONS_TIMEOUT_MS` (`30000`), and `TRANSCRIBE_TIMEOUT_MS` (`300000`) — optional endpoint ceilings; deadlines cancel active work, wait for cleanup, and then return bounded generic timeout envelopes.
 - `TS_AUTHKEY`, `TS_EXIT_NODE_HOSTNAME` — Tailscale exit-node config.
 
