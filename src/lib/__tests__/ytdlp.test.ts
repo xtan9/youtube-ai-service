@@ -56,6 +56,17 @@ describe("buildYtdlpArgs", () => {
     expect(clients[0]).not.toBe("web");
   });
 
+  it("uses one PO-Token-bound client so the selected media URL matches its token", () => {
+    const args = buildYtdlpArgs(
+      VIDEO_REFERENCE,
+      "/tmp/x.mp3",
+      mediaConfig
+    );
+    const extractorArgsIdx = args.indexOf("--extractor-args");
+    const value = args[extractorArgsIdx + 1];
+    expect(value).toBe("youtube:player_client=mweb");
+  });
+
   it("sets a browser User-Agent matching the player_client profile", () => {
     const args = buildYtdlpArgs(
       VIDEO_REFERENCE,
@@ -65,6 +76,17 @@ describe("buildYtdlpArgs", () => {
     const uaIdx = args.indexOf("--user-agent");
     expect(uaIdx).toBeGreaterThan(-1);
     expect(args[uaIdx + 1]).toMatch(/Mozilla\//);
+  });
+
+  it("enables the image-provided Deno runtime for YouTube JS challenges", () => {
+    const args = buildYtdlpArgs(
+      VIDEO_REFERENCE,
+      "/tmp/x.mp3",
+      mediaConfig
+    );
+    const runtimeIdx = args.indexOf("--js-runtimes");
+    expect(runtimeIdx).toBeGreaterThan(-1);
+    expect(args[runtimeIdx + 1]).toBe("deno");
   });
 
   it("configures the PO Token provider so yt-dlp can satisfy YouTube's attestation requirement", () => {
