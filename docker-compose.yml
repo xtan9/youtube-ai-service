@@ -83,6 +83,26 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  # Groq uploads must not share the residential Tailscale exit. Large
+  # multipart uploads are reset on that path even though the same request
+  # succeeds over the VPS's native egress. This internal-only forwarder stays
+  # on the Compose bridge and gives transcription a direct route to Groq while
+  # YouTube acquisition continues to use the residential exit above.
+  groq-forwarder:
+    image: nginx:1.29.1-alpine
+    container_name: yt-ai-groq-forwarder
+    volumes:
+      - ./nginx-groq-forwarder.conf:/etc/nginx/conf.d/default.conf:ro
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
   youtube-ai-service:
     build: .
     container_name: youtube-ai-service
@@ -97,12 +117,15 @@ services:
         condition: service_healthy
       pot-provider:
         condition: service_healthy
+      groq-forwarder:
+        condition: service_healthy
     environment:
       - VPS_API_KEY=${VPS_API_KEY}
       - VPS_API_KEY_PREVIOUS=${VPS_API_KEY_PREVIOUS:-}
       # Compose transports optional overrides; the app owns their defaults,
       # parsing, and startup validation.
       - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_API_URL=${GROQ_API_URL:-http://groq-forwarder:8080/openai/v1/audio/transcriptions}
       - GROQ_MODEL=${GROQ_MODEL:-}
       - GROQ_TIMEOUT_MS=${GROQ_TIMEOUT_MS:-}
       - GROQ_LOCAL_FALLBACK_MAX_SECONDS=${GROQ_LOCAL_FALLBACK_MAX_SECONDS:-}

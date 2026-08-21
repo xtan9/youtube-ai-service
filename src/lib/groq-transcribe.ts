@@ -50,7 +50,6 @@ export class GroqTranscribeError extends Error {
   }
 }
 
-const GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 // `whisper-large-v3` is more robust than `-turbo` against the
 // long-silent-stretch hallucination class that survived the prior
 // anchor-prompt fix on its own (a 25s silent gap between Chinese
@@ -164,7 +163,7 @@ async function transcribeWithGroq(
 
     const doFetch = () => {
       const providerTimeout = AbortSignal.timeout(timeoutMs);
-      return fetch(GROQ_URL, {
+      return fetch(config.apiUrl, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}` },
         body: buildBody(),

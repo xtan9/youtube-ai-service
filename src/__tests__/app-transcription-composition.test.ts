@@ -113,6 +113,7 @@ describe("production transcription composition", () => {
         transcription: {
           groq: {
             apiKey: "groq-test-key",
+            apiUrl: "https://groq.example.test/openai/v1/audio/transcriptions",
             model: "whisper-test-model",
             timeoutMs: 7_000,
           },
@@ -135,6 +136,7 @@ describe("production transcription composition", () => {
     expect(mocks.createGroqTranscriber).toHaveBeenCalledOnce();
     expect(mocks.createGroqTranscriber).toHaveBeenCalledWith({
       apiKey: "groq-test-key",
+      apiUrl: "https://groq.example.test/openai/v1/audio/transcriptions",
       model: "whisper-test-model",
       timeoutMs: 7_000,
     });

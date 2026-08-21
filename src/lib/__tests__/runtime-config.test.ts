@@ -49,6 +49,7 @@ describe("loadRuntimeConfig", () => {
       CAPTIONS_TIMEOUT_MS: "5000",
       TRANSCRIBE_TIMEOUT_MS: "6000",
       GROQ_API_KEY: " groq-secret ",
+      GROQ_API_URL: "http://groq-forwarder:8080/openai/v1/audio/transcriptions",
       GROQ_MODEL: " custom-model ",
       GROQ_TIMEOUT_MS: "7000",
       GROQ_LOCAL_FALLBACK_MAX_SECONDS: "45.5",
@@ -74,6 +75,7 @@ describe("loadRuntimeConfig", () => {
       transcription: {
         groq: {
           apiKey: "groq-secret",
+          apiUrl: "http://groq-forwarder:8080/openai/v1/audio/transcriptions",
           model: "custom-model",
           timeoutMs: 7000,
         },
@@ -97,6 +99,7 @@ describe("loadRuntimeConfig", () => {
         MAX_REQUEST_BODY_BYTES: "1.5",
         MAX_MEDIA_DURATION_SECONDS: "-2",
         GROQ_TIMEOUT_MS: "later",
+        GROQ_API_URL: "file:///tmp/not-http",
         POT_PROVIDER_URL: "ftp://not-supported.example",
       });
     } catch (error) {
@@ -110,6 +113,7 @@ describe("loadRuntimeConfig", () => {
       "MAX_REQUEST_BODY_BYTES",
       "MAX_MEDIA_DURATION_SECONDS",
       "GROQ_TIMEOUT_MS",
+      "GROQ_API_URL",
       "POT_PROVIDER_URL",
     ]);
     expect((thrown as Error).message).not.toContain(invalidSecret);

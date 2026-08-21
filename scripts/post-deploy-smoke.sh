@@ -56,6 +56,28 @@ if ! docker exec youtube-ai-service sh -c '[ -n "$GROQ_API_KEY" ]'; then
 fi
 echo "[smoke] OK: GROQ_API_KEY present"
 
+echo "[smoke] Groq direct egress: verifying the internal forwarder reaches Groq"
+# The app shares the residential Tailscale namespace for YouTube. Large Groq
+# uploads reset on that route, so production points GROQ_API_URL at a bridge-
+# network forwarder whose own egress is the VPS. The models call is cheap and
+# proves DNS, Docker routing, TLS, auth forwarding, and Groq availability
+# without consuming audio transcription quota.
+if ! docker exec youtube-ai-service node -e "
+const url = new URL(process.env.GROQ_API_URL);
+url.pathname = '/openai/v1/models';
+fetch(url, {
+  headers: { Authorization: 'Bearer ' + process.env.GROQ_API_KEY },
+}).then(async r => {
+  if (!r.ok) { console.error('status', r.status, await r.text()); process.exit(1); }
+  process.exit(0);
+}).catch(e => { console.error(e.message); process.exit(1); });
+" 2>&1; then
+  echo "[smoke] FAIL: Groq models endpoint not reachable through direct-egress forwarder"
+  docker logs yt-ai-groq-forwarder --tail 40 || true
+  exit 1
+fi
+echo "[smoke] OK: Groq direct-egress forwarder returned 200"
+
 echo "[smoke] pot-provider: verifying HTTP listener is reachable from the app container"
 if ! docker exec youtube-ai-service node -e "require('http').get('http://127.0.0.1:4416/ping', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"; then
   echo "[smoke] FAIL: pot-provider /ping not reachable from app container"

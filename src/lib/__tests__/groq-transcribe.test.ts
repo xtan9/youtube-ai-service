@@ -42,6 +42,7 @@ const validGroqBody = {
 
 const defaultConfig: GroqConfig = {
   apiKey: "test-key",
+  apiUrl: "https://groq.example.test/openai/v1/audio/transcriptions",
   model: "whisper-large-v3",
   timeoutMs: 180_000,
 };
@@ -78,6 +79,10 @@ describe("transcribeViaGroq", () => {
 
     const result = await transcribeViaGroq("/tmp/clip.mp3");
 
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      defaultConfig.apiUrl,
+      expect.any(Object),
+    );
     expect(result.segments).toEqual([
       { text: "hello", start: 0, duration: 1.5 },
       { text: "world", start: 1.5, duration: 1.5 },
