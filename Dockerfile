@@ -24,6 +24,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 # plugin returns no PO Token and yt-dlp falls back to no-PO-Token mode,
 # which YouTube rejects for player responses.
 ARG BGUTIL_POT_VERSION=1.3.1
+ARG YT_DLP_VERSION=2026.08.19
 # `whisper-ctranslate2` is the CLI wrapper that `src/lib/whisper.ts` invokes
 # (`faster-whisper` the pip package ships no binary — just the Python
 # library — which is why a naive `pip install faster-whisper` leaves a
@@ -38,13 +39,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && python3 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir \
         "whisper-ctranslate2==${WHISPER_CT2_VERSION}" \
-        yt-dlp \
+        "yt-dlp[default]==${YT_DLP_VERSION}" \
         "bgutil-ytdlp-pot-provider==${BGUTIL_POT_VERSION}" \
     && apt-get clean && rm -rf /var/lib/apt/lists/* \
     # Smoke-test the binary at build time so a future Dockerfile edit that
     # breaks the venv PATH or mangles the pip install fails the build
     # instead of shipping an image that ENOENTs at first user request.
-    && /opt/venv/bin/whisper-ctranslate2 --version >/dev/null
+    && /opt/venv/bin/whisper-ctranslate2 --version >/dev/null \
+    && /opt/venv/bin/pip show yt-dlp-ejs >/dev/null \
+    && /opt/venv/bin/yt-dlp --version
 
 # `bgutil-ytdlp-pot-provider` is a yt-dlp plugin that fetches Proof-of-Origin
 # tokens from the `pot-provider` sidecar container (see docker-compose.yml).
@@ -56,7 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # found" without it, and some newer YouTube player clients need JS to
 # solve nonce/signature challenges during extraction. Version pinned so
 # a breaking deno release can't ship to prod on the next image rebuild.
-ARG DENO_VERSION=v2.1.4
+ARG DENO_VERSION=v2.9.5
 RUN curl -fsSL https://deno.land/install.sh | sh -s -- --yes ${DENO_VERSION} \
     && mv /root/.deno/bin/deno /usr/local/bin/deno \
     && deno --version

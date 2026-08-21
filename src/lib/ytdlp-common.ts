@@ -6,11 +6,11 @@ import type { MediaAcquisitionConfig } from "./runtime-config.js";
 // call path must apply to the other.
 
 // Datacenter IPs frequently hit YouTube's "Sign in to confirm you're not a
-// bot" wall when yt-dlp uses the default `web` player client. Cycling
-// through alternate clients (mweb / web_safari / android_vr) unblocks most
-// requests when combined with a residential-IP egress path (Tailscale exit
-// node → home device, wired in docker-compose.yml).
-export const YOUTUBE_PLAYER_CLIENTS = "web_safari,mweb,android_vr";
+// bot" wall when yt-dlp uses the default `web` player client. Keep one
+// PO-Token-capable client here: the provider issues a client-bound GVS token,
+// so listing multiple clients can issue a web_safari token and then select an
+// mweb media URL, which the CDN rejects with HTTP 403.
+export const YOUTUBE_PLAYER_CLIENTS = "mweb";
 
 // Pair the client list with a browser UA so the request profile matches.
 export const SAFARI_USER_AGENT =
@@ -32,6 +32,11 @@ export function buildYtdlpCommonArgs(
 ): string[] {
   return [
     "--no-playlist",
+    // yt-dlp no longer ships an internal YouTube challenge interpreter.
+    // Keep the runtime explicit so a PATH/image regression fails visibly
+    // instead of degrading into signed media URLs that return HTTP 403.
+    "--js-runtimes",
+    "deno",
     "--extractor-args",
     `youtube:player_client=${YOUTUBE_PLAYER_CLIENTS}`,
     "--extractor-args",
