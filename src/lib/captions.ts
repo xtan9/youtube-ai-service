@@ -1,19 +1,9 @@
-import {
-  areLanguageTagsEqual,
-  haveSamePrimaryLanguage,
-  type LanguageTag,
-  type PrimaryLanguageCode,
-} from "./language-tag.js";
+import { areLanguageTagsEqual, haveSamePrimaryLanguage, type LanguageTag, type PrimaryLanguageCode } from "./language-tag.js";
 import { logServiceEvent } from "./observability.js";
-import {
-  createYoutubeTranscriptCaptionTrackProvider,
-  type CaptionTrackProviderCandidate,
-  type ProviderCaptionTrackLanguage,
-  type CaptionTrackProvider,
-  type CaptionTrackProviderResult,
-} from "./caption-provider.js";
+import { createYoutubeTranscriptCaptionTrackProvider, type CaptionTrackProviderCandidate, type ProviderCaptionTrackLanguage, type CaptionTrackProvider, type CaptionTrackProviderResult } from "./caption-provider.js";
 import type { TimedTextSegment } from "./timed-text.js";
 import type { YouTubeVideoReference } from "./youtube-url.js";
+import { decodeCaptionEntities } from "./caption-text.js";
 
 export type {
   CaptionTrackProvider,
@@ -23,6 +13,7 @@ export type {
   ProviderCaptionTrackLanguage,
   ProviderTimedTextSegment,
 } from "./caption-provider.js";
+
 export type { TimedTextSegment } from "./timed-text.js";
 
 export type PromptLocale = "en" | "zh";
@@ -74,17 +65,8 @@ export type CaptionTrackAcquisition = (
 ) => Promise<CaptionTrackAcquisitionOutcome>;
 
 const MAX_DIAGNOSTIC_COUNT = 1_000;
-const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
-const MAX_UNICODE_CODEPOINT = 0x10ffff;
 
-const NAMED_XML_ENTITIES: Readonly<Record<string, string>> = {
-  "&amp;": "&",
-  "&lt;": "<",
-  "&gt;": ">",
-  "&quot;": '"',
-  "&apos;": "'",
-  "&nbsp;": "\u00a0",
-};
+const SAFE_ERROR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9]{0,63}$/;
 
 function boundDiagnosticCount(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -163,42 +145,6 @@ function selectProviderRetryTrack(
       haveSamePrimaryLanguage(track.languageTag, requested),
     ) ?? null
   );
-}
-
-function safeFromCodePoint(codePoint: number, original: string): string {
-  // Unicode scalar values exclude the surrogate range even though
-  // String.fromCodePoint accepts it on some runtimes.
-  if (
-    !Number.isFinite(codePoint) ||
-    codePoint < 0 ||
-    codePoint > MAX_UNICODE_CODEPOINT ||
-    (codePoint >= 0xd800 && codePoint <= 0xdfff)
-  ) {
-    return original;
-  }
-  try {
-    return String.fromCodePoint(codePoint);
-  } catch {
-    return original;
-  }
-}
-
-function decodeEntitiesOnce(text: string): string {
-  return text
-    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (match) =>
-      NAMED_XML_ENTITIES[match] ?? match,
-    )
-    .replace(/&#x([0-9a-fA-F]+);/g, (match, hex: string) =>
-      safeFromCodePoint(parseInt(hex, 16), match),
-    )
-    .replace(/&#(\d+);/g, (match, decimal: string) =>
-      safeFromCodePoint(parseInt(decimal, 10), match),
-    );
-}
-
-function decodeCaptionEntities(text: string): string {
-  const once = decodeEntitiesOnce(text);
-  return once === text ? once : decodeEntitiesOnce(once);
 }
 
 function trackPrimaryLanguage(
