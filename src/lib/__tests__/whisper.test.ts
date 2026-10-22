@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { unlink } from "fs/promises";
+import { beforeEach, describe, it, expect, vi } from "vitest";
+import { readFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -194,6 +194,40 @@ describe("parseWhisperJson", () => {
 });
 
 describe("transcribeAudio", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns timed text and removes the completed output file", async () => {
+    mockedUnlink.mockResolvedValue(undefined);
+    mockedExecFile.mockImplementation(
+      // @ts-expect-error execFile overloads do not narrow cleanly in mocks
+      (_command, _args, _options, callback) => callback?.(null, "", ""),
+    );
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({
+        segments: [{ start: 2, end: 4.5, text: " A complete thought. " }],
+      }),
+    );
+
+    await expect(transcribeAudio("/tmp/completed.mp3")).resolves.toEqual([
+      { text: "A complete thought.", start: 2, duration: 2.5 },
+    ]);
+    expect(mockedUnlink).toHaveBeenCalledWith(join(tmpdir(), "completed.json"));
+  });
+
+  it("removes unreadable output before rejecting the transcription", async () => {
+    mockedUnlink.mockResolvedValue(undefined);
+    mockedExecFile.mockImplementation(
+      // @ts-expect-error execFile overloads do not narrow cleanly in mocks
+      (_command, _args, _options, callback) => callback?.(null, "", ""),
+    );
+    vi.mocked(readFile).mockResolvedValue("not valid JSON");
+
+    await expect(transcribeAudio("/tmp/invalid.mp3")).rejects.toThrow(
+      "Failed to read transcript file",
+    );
+    expect(mockedUnlink).toHaveBeenCalledWith(join(tmpdir(), "invalid.json"));
+  });
+
   it("passes the work signal to Whisper and cleans partial output after abort", async () => {
     const controller = new AbortController();
     controller.abort(new DOMException("deadline", "TimeoutError"));

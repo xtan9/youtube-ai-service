@@ -150,42 +150,38 @@ export async function transcribeAudio(
     tmpdir(),
     basename(audioPath).replace(/\.[^.]+$/, ".json"),
   );
-  return new Promise((resolve, reject) => {
-    const args = buildWhisperArgs(audioPath, lang);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        WHISPER_CLI,
+        buildWhisperArgs(audioPath, lang),
+        { timeout: 600_000, signal },
+        (error, _stdout, stderr) => {
+          if (error) {
+            reject(
+              new LocalTranscriptionError(
+                `${WHISPER_CLI} failed: ${stderr || error.message}`,
+                { cause: error },
+              ),
+            );
+          } else {
+            resolve();
+          }
+        },
+      );
+    });
 
-    execFile(
-      WHISPER_CLI,
-      args,
-      { timeout: 600_000, signal },
-      async (error, _stdout, stderr) => {
-        if (error) {
-          await cleanupWhisperOutput(jsonPath);
-          reject(
-            new LocalTranscriptionError(
-              `${WHISPER_CLI} failed: ${stderr || error.message}`,
-              { cause: error }
-            )
-          );
-          return;
-        }
-
-        try {
-          const raw = await readFile(jsonPath, "utf-8");
-          const segments = parseWhisperJson(raw);
-          await cleanupWhisperOutput(jsonPath);
-          resolve(segments);
-        } catch (readErr) {
-          await cleanupWhisperOutput(jsonPath);
-          reject(
-            new LocalTranscriptionError(
-              `Failed to read transcript file: ${readErr}`,
-              { cause: readErr }
-            )
-          );
-        }
-      }
-    );
-  });
+    try {
+      return parseWhisperJson(await readFile(jsonPath, "utf-8"));
+    } catch (readErr) {
+      throw new LocalTranscriptionError(
+        `Failed to read transcript file: ${readErr}`,
+        { cause: readErr },
+      );
+    }
+  } finally {
+    await cleanupWhisperOutput(jsonPath);
+  }
 }
 
 async function cleanupWhisperOutput(jsonPath: string): Promise<void> {
